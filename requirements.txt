@@ -1,0 +1,9 @@
+# Install with: python -m pip install -r requirements.txt
+# FastAPI defines the application and the GET /health route.
+# >= allows this minimum version; < excludes the next major version.
+# These ranges are not a lockfile: installs may resolve different versions over time.
+fastapi>=0.115,<1.0
+# Uvicorn is the server that listens for HTTP requests and runs the FastAPI app.
+uvicorn>=0.30,<1.0
+# The monitor uses built-in urllib, so Requests is not a project dependency.
+# unittest is also built into Python; no extra test package is needed.

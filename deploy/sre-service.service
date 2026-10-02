@@ -1,0 +1,28 @@
+# Inactive Linux template; macOS does not use systemd. No installation is done here.
+# Before future use: create user sre, place the project at the path below,
+# create its .venv and install requirements. This starts only the service, not the monitor.
+
+# General information and startup ordering for this unit (managed process).
+[Unit]
+# Human-readable name shown in systemd status output.
+Description=Tiny SRE FastAPI service
+# Order startup after the network target; this does not guarantee internet access.
+After=network.target
+
+# How systemd should run and supervise the process.
+[Service]
+# Use a dedicated non-root account that must already exist.
+User=sre
+# Run from the project root so Python can import service.main.
+WorkingDirectory=/opt/site-reliability-platform
+# Use this project's Python, load app from service/main.py, and listen locally.
+ExecStart=/opt/site-reliability-platform/.venv/bin/python -m uvicorn service.main:app --host 127.0.0.1 --port 8000
+# Restart after a process failure; this does not detect unhealthy HTTP responses.
+Restart=on-failure
+# Wait three seconds before attempting a restart.
+RestartSec=3
+
+# Describe how a future systemctl enable operation would attach this unit at boot.
+[Install]
+# Start alongside ordinary multi-user system services when enabled.
+WantedBy=multi-user.target
