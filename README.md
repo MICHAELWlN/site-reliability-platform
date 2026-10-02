@@ -2,7 +2,76 @@
 
 A small local reliability exercise: FastAPI answers a health request, and a separate
 Python process checks it, records results, and generates local alerts during outages.
-Start and test everything on your Mac before considering AWS. Python 3.10+ is required.
+Local testing comes first; initial AWS infrastructure setup has now begun, as recorded
+below. The application is not yet deployed on EC2. Python 3.10+ is required.
+
+## AWS deployment checkpoint — 2026-10-02
+
+This checkpoint records the owner's reported progress. EC2 status checks were still
+**initializing** when work stopped; passing checks have not been confirmed.
+
+### Completed locally
+
+FastAPI `/health`, Uvicorn, synthetic health monitoring, structured JSON logging,
+consecutive-failure detection, cooldown-limited local alerts, local failure/recovery
+exercises, and automated tests are in place. These are local capabilities and results,
+not evidence of EC2 application deployment. The walkthrough below and
+[failure exercises](incidents/failure-tests.md) explain how to repeat the local checks.
+
+### AWS infrastructure prepared
+
+- Created and launched an Ubuntu EC2 instance named `sre-platform` as a small
+  learning/development server.
+- Created an SSH key pair for later remote access.
+- Restricted security-group SSH access (port 22) to the owner's IP.
+- Allowed HTTP (port 80) from `0.0.0.0/0` for a future public Nginx entry point.
+- Intentionally did not expose Uvicorn port 8000 publicly.
+- Reached the EC2 status-check stage; checks were still initializing at this checkpoint.
+
+The intended architecture is:
+
+```text
+Internet → EC2 Ubuntu VM → Nginx → Uvicorn/FastAPI → /health
+```
+
+This is the architecture goal, not a running deployment. Uvicorn should remain bound
+to `127.0.0.1:8000` inside EC2. Nginx will eventually accept public HTTP on port 80
+and forward it to localhost:8000. Opening port 80 alone does not install Nginx or
+make the application available.
+
+### Next AWS step — not completed yet
+
+1. Open the EC2 console and select `sre-platform`. If it is stopped, start it;
+   then wait for its status checks to pass before connecting.
+2. Obtain its current public IPv4 address. Keep it out of this repository.
+3. Keep the private SSH key outside the repository, restrict its local file
+   permissions to owner-read-only (for example, `chmod 400` on the key file), and
+   use it to connect over SSH as the `ubuntu` user. Confirm the SSH rule still
+   permits your current IP.
+4. Verify the remote operating system is Ubuntu, then install Git, Python 3,
+   Python's venv/pip support, and curl.
+5. Clone this repository on EC2, enter its directory, create and activate `.venv`,
+   and install `requirements.txt`.
+6. Run `python -m uvicorn service.main:app --host 127.0.0.1 --port 8000` on EC2.
+7. In another SSH session, run `curl -i http://127.0.0.1:8000/health` from inside
+   EC2 and verify HTTP 200 with `{"status":"healthy"}`. Record the actual result.
+
+No SSH connection, repository clone, EC2 virtual environment, dependency installation,
+Uvicorn/FastAPI run, or EC2 `/health` test has been completed at this checkpoint.
+Never commit the private key or a `.pem` file, account ID, public IP address,
+credentials, access keys, or other secrets.
+
+### Future work after the first EC2 health check
+
+1. Run `monitor/monitor.py` on EC2 and verify and document hosted outage/recovery behavior.
+2. Configure systemd to manage the service.
+3. Configure Nginx as the public port-80 reverse proxy to `127.0.0.1:8000`.
+4. Add CloudWatch dashboards/alarms and SNS notifications.
+5. Perform and document final controlled failure tests, including evidence of
+   automated recovery before claiming it works.
+
+None of these future steps has been completed. The files in `deploy/` remain
+uninstalled templates; automated recovery has not been demonstrated.
 
 ## What each file does
 

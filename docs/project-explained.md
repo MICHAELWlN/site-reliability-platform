@@ -12,6 +12,10 @@ Only claim a test passed after running it and recording the result. Templates in
 `deploy/` demonstrate a possible later Linux layout; their presence does not mean
 Linux, nginx, systemd, or AWS deployment has been tested or completed.
 
+Initial EC2 infrastructure setup has begun, but the application has not been deployed
+there. See the [AWS deployment checkpoint](../README.md#aws-deployment-checkpoint--2026-10-02)
+for the completed setup, unconfirmed status checks, and next manual steps.
+
 ## How a request moves through the project
 
 1. Uvicorn listens on `127.0.0.1:8000` and passes requests to FastAPI.
@@ -77,7 +81,8 @@ The next streak reaches three at second 69, so its alert must wait for cooldown.
 ## What remains outside this local version
 
 No remote notifications, persistent monitor state, log rotation, automatic service
-recovery, dashboard, database checks, or cloud resources are implemented. urllib can
+recovery, dashboard, or database checks are implemented. An Ubuntu EC2 instance has
+been created and launched, but EC2 application setup and testing remain pending. urllib can
 follow redirects, and its timeout is for blocking socket operations rather than a
 strict total deadline. The monitor only reads response status, not the response body.
 The systemd template would restart a crashed service if installed later; that is
