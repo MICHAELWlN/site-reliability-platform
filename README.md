@@ -316,3 +316,30 @@ Then, in the other terminal:
 ```sh
 python monitor/monitor.py --url http://127.0.0.1:8001/health
 ```
+## AWS EC2 Deployment and systemd Recovery
+
+The FastAPI service was deployed to an Ubuntu EC2 instance and configured as a systemd-managed service.
+
+### Deployment
+
+- FastAPI exposes the `/health` endpoint.
+- Uvicorn serves the application on `127.0.0.1:8000`.
+- systemd manages the Uvicorn process using `deploy/sre-service.service`.
+- The service is enabled for automatic startup during normal Ubuntu boot.
+- `Restart=on-failure` is configured for process-level recovery.
+- Uvicorn remains bound to localhost; a public Nginx reverse proxy has not yet been configured.
+
+### Monitoring and Failure Testing
+
+The Python synthetic monitor was run against the EC2-hosted `/health` endpoint.
+
+A controlled outage demonstrated:
+
+- Successful HTTP 200 health checks during normal operation.
+- Connection-refused errors while the application was unavailable.
+- Consecutive failure tracking.
+- An alert after three consecutive failures.
+- Detection of application recovery when HTTP 200 responses resumed.
+- Reset of the consecutive failure count after recovery.
+
+This checkpoint establishes the EC2, FastAPI, Uvicorn, systemd, and synthetic monitoring foundation. Nginx, CloudWatch custom metrics and alarms, and SNS alert routing remain future deployment steps.
