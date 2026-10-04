@@ -1,89 +1,216 @@
-# Explaining the project
+# Project Explained
 
-## A short walkthrough you can give someone
+## Purpose
 
-“This project runs a small HTTP service and monitors it from a separate process.
-The service exposes `/health`. The monitor checks the endpoint, writes structured
-JSON records, and counts consecutive failures. Three failures trigger a local alert.
-A cooldown limits repeat alerts while checks keep running. I can stop the service
-to demonstrate an outage, restart it to show recovery, and inspect the saved logs.”
+This project is a small end-to-end site reliability engineering exercise.
 
-Only claim a test passed after running it and recording the result. Templates in
-`deploy/` demonstrate a possible later Linux layout; their presence does not mean
-Linux, nginx, systemd, or AWS deployment has been tested or completed.
+The application itself is intentionally simple: FastAPI exposes a `/health` endpoint. The main focus is the reliability layer around the application—deployment, process management, reverse proxying, synthetic monitoring, observability, alerting, failure testing, and recovery.
 
-Initial EC2 infrastructure setup has begun, but the application has not been deployed
-there. See the [AWS deployment checkpoint](../README.md#aws-deployment-checkpoint--2026-10-02)
-for the completed setup, unconfirmed status checks, and next manual steps.
+## Request Path
 
-## How a request moves through the project
+The deployed request path is:
 
-1. Uvicorn listens on `127.0.0.1:8000` and passes requests to FastAPI.
-2. FastAPI matches a GET request for `/health` to the `health` function.
-3. That function returns a dictionary, which FastAPI sends as JSON with HTTP 200.
-4. The monitor's `check_health` function requests that URL and reports the outcome.
-5. `Monitor.poll` updates the consecutive failure count and emits a `check` record.
-6. If at least three failures have occurred and cooldown permits, it emits `alert`.
-7. The main loop sleeps for the success or failure delay before trying again.
-8. The shell's `tee` command displays and appends those records to a local file.
+```text
+Internet -> Nginx :80 -> Uvicorn 127.0.0.1:8000 -> FastAPI /health
+```
 
-## Why these choices are reasonable
+Nginx accepts public HTTP traffic on port 80 and proxies requests to Uvicorn.
 
-| Choice | Explanation you can defend | Limitation |
-| --- | --- | --- |
-| Tiny health endpoint | Makes service reachability easy to demonstrate | Does not check dependencies or business operations |
-| Separate monitor process | Can observe the service after the service stops | Cannot observe anything if the monitor itself stops |
-| Built-in urllib | Avoids adding a dependency for one simple GET request | Less convenient than Requests for larger HTTP clients |
-| Any HTTP 2xx is success | Uses HTTP's success category consistently | Does not validate the body; a wrong body with 200 still passes |
-| Three consecutive failures | Filters out one or two isolated failures | Adds detection delay; threshold is a fixed learning choice |
-| One-second failure retry | Rechecks a temporary failure sooner | Continues at a fixed rate during long outages; no backoff |
-| Sixty-second cooldown | Limits repeat alerts while preserving check logs | Can delay a new outage alert following a brief recovery |
-| Monotonic elapsed time | Clock corrections do not disturb duration/cooldown arithmetic | Values are internal elapsed time, not dates |
-| UTC timestamps | Makes logged event times comparable | Convert to local time when discussing an incident |
-| JSON Lines | Each record is independently readable by tools | The complete log is not a single JSON document |
-| In-memory state | Keeps the monitor understandable | Restarting resets failure count and cooldown |
-| Localhost binding | Supports a local-only exercise | Does not show remote network availability |
-| Version ranges | Bound the permitted dependency versions | Does not guarantee identical installs like a lockfile would |
+Uvicorn listens only on localhost, so the application server is not directly exposed to the internet.
 
-## Reading the Python syntax
+## Service Management
 
-- `import` brings an existing library into this file.
-- `def` defines a function; its indented lines execute when it is called.
-- `class` groups data and operations; `self` refers to one instance.
-- `__init__` initializes the state for a new instance.
-- `return` hands a result back to the caller.
-- `healthy, status, error = ...` unpacks three returned values.
-- `a if condition else b` chooses one value based on a condition.
-- `None` means no value; JSON represents it as `null`.
-- `True` and `False` become JSON `true` and `false`.
-- `with` manages a resource or temporary context, including cleanup on exit.
-- `try` / `except` handles anticipated errors without stopping the whole program.
-- `**fields` gathers named arguments, or expands them into another dictionary.
-- `if __name__ == "__main__"` runs the entry point only when executed as a script.
-- `@app.get(...)` registers the following function as the handler for a GET route.
+The application runs under systemd using `deploy/sre-service.service`.
 
-Detailed comments beside each operation explain the project's actual use of these
-constructs. The extra comments make the monitor longer than the original compact
-version, but its runtime logic remains the same.
+The unit:
 
-## What the tests establish
+- runs as the Ubuntu user
+- starts from the deployed repository
+- uses the project's Python virtual environment
+- runs Uvicorn on `127.0.0.1:8000`
+- is enabled during normal system boot
+- is configured with `Restart=on-failure`
+- waits five seconds before a configured restart attempt
 
-The four automated tests cover failure reset and cooldown across recovery; network
-and HTTP failures; successful responses and timeout forwarding; retry delays and
-clean loop shutdown. They replace HTTP calls and elapsed time with controlled values.
-That makes them fast and repeatable, but it does not prove an actual socket timeout
-or a real server's availability. Manual curl and outage checks provide live evidence.
+Boot persistence was verified by restarting the EC2 instance and confirming that the service returned active and `/health` returned HTTP 200.
 
-The cooldown test uses alerts at simulated seconds 5, 65, and 125. A success at
-second 66 clears the failure streak but preserves the alert timer from second 65.
-The next streak reaches three at second 69, so its alert must wait for cooldown.
+The controlled outage test used an intentional `systemctl stop` followed by manual restoration. Therefore, that test demonstrates outage detection and recovery monitoring, not automatic crash recovery.
 
-## What remains outside this local version
+## Synthetic Monitor
 
-No remote notifications, persistent monitor state, log rotation, automatic service
-recovery, dashboard, or database checks are implemented. An Ubuntu EC2 instance has
-been created and launched, but EC2 application setup and testing remain pending. urllib can
-follow redirects, and its timeout is for blocking socket operations rather than a
-strict total deadline. The monitor only reads response status, not the response body.
-The systemd template would restart a crashed service if installed later; that is
-separate from the local monitor and does not react to its alert records.
+`monitor/monitor.py` independently checks the health endpoint.
+
+The monitor:
+
+1. sends an HTTP health check
+2. measures response duration
+3. records a structured JSON event
+4. tracks consecutive failures
+5. retries failed checks
+6. emits a local alert after three consecutive failures
+7. limits repeated alerts using a cooldown
+8. detects recovery
+9. resets the consecutive failure count after recovery
+
+## CloudWatch Metrics
+
+With the `--cloudwatch` option enabled, the monitor publishes custom metrics through boto3.
+
+CloudWatch namespace:
+
+```text
+SREPlatform
+```
+
+Metrics:
+
+- `Availability`
+- `LatencyMs`
+- `Failures`
+
+The EC2 instance uses an IAM role for AWS access rather than storing AWS access keys in the repository.
+
+## Observability and Alerting
+
+A CloudWatch dashboard displays the custom application metrics.
+
+The alert path is:
+
+```text
+Application failure
+        |
+        v
+Synthetic monitor
+        |
+        v
+CloudWatch custom metrics
+        |
+        v
+CloudWatch alarm
+        |
+        v
+Amazon SNS
+        |
+        v
+Email notification
+```
+
+The SNS email subscription was confirmed and tested.
+
+## Controlled Failure Test
+
+The complete monitoring and alerting path was tested by deliberately creating an application outage.
+
+Before the outage:
+
+- `sre-service` was active
+- Nginx successfully proxied `/health`
+- the endpoint returned HTTP 200
+- the monitor reported healthy checks
+
+The application service was then intentionally stopped.
+
+During the outage:
+
+- the endpoint became unavailable
+- the monitor detected consecutive failures
+- the local threshold alert fired after three failures
+- failure metrics were published to CloudWatch
+- the CloudWatch alarm entered its alarm state
+- SNS delivered the alarm email
+
+The service was then started again.
+
+After restoration:
+
+- the service returned active
+- `/health` returned HTTP 200 through Nginx
+- the monitor detected recovery
+- the consecutive failure count reset to zero
+
+Detailed results are documented in `incidents/failure-tests.md`.
+
+## Design Decisions
+
+### Minimal Application
+
+The FastAPI application is deliberately small so the project can focus on operating and observing the service rather than application development.
+
+### Localhost-Bound Uvicorn
+
+Uvicorn listens on `127.0.0.1:8000` instead of accepting public traffic directly.
+
+Nginx acts as the public HTTP entry point.
+
+### systemd
+
+systemd provides service management, normal boot startup, and configured restart-on-failure behavior without introducing a container orchestrator into a small single-instance project.
+
+### Separate Synthetic Monitor
+
+The monitor checks the service independently rather than relying on the application to report its own reliability state.
+
+### Consecutive-Failure Threshold
+
+The monitor waits for three consecutive failed checks before generating its local threshold alert. This prevents a single transient failure from immediately producing an alert.
+
+### CloudWatch and SNS
+
+CloudWatch centralizes application-level metrics and evaluates the failure alarm.
+
+SNS provides the notification path from the CloudWatch alarm to email.
+
+### IAM Role
+
+AWS API access is provided through the EC2 instance's IAM role instead of hard-coded credentials.
+
+## What the Project Demonstrates
+
+The project demonstrates a basic reliability lifecycle:
+
+```text
+Deploy
+  ->
+Observe
+  ->
+Detect failure
+  ->
+Alert
+  ->
+Restore
+  ->
+Verify recovery
+```
+
+Every major part of this path was configured and tested directly.
+
+## Current Limitations
+
+This is a learning and portfolio project rather than a production-ready platform.
+
+It currently does not provide:
+
+- TLS
+- high availability or multiple EC2 instances
+- infrastructure as code
+- automated deployment
+- centralized log aggregation
+- external monitoring from a separate host
+- application authentication
+- dependency-level health checks
+
+The current IAM permissions can also be tightened further toward least privilege.
+
+## Future Improvements
+
+Logical next steps include:
+
+- infrastructure as code
+- least-privilege IAM
+- TLS
+- automated deployment
+- centralized logging
+- external monitoring
+- additional failure scenarios
+- dependency-aware health checks
+- automated integration testing
