@@ -114,3 +114,71 @@ What I learned or would investigate next:
 Do not claim cloud reliability from these local checks. Finish by stopping both
 processes with Control+C in their respective terminals. Leave the logs available
 for review; `tee -a` will append on the next run.
+## AWS EC2 End-to-End Failure Test
+
+### Environment
+
+The service was deployed to an Ubuntu EC2 instance.
+
+Request path:
+
+`Client -> Nginx :80 -> Uvicorn 127.0.0.1:8000 -> FastAPI /health`
+
+Uvicorn was managed by systemd using `sre-service.service`.
+
+The Python synthetic monitor published custom application metrics to Amazon CloudWatch under the `SREPlatform` namespace:
+
+- `Availability`
+- `LatencyMs`
+- `Failures`
+
+A CloudWatch alarm monitored the failure metric and routed alarm notifications through an Amazon SNS topic with a confirmed email subscription.
+
+### Healthy State
+
+Before failure injection:
+
+- `sre-service` was active.
+- Nginx successfully proxied `/health` to Uvicorn.
+- `/health` returned HTTP 200.
+- The synthetic monitor reported successful checks.
+- Consecutive failures remained at zero.
+- Healthy measurements were published to CloudWatch.
+
+### Failure Injection
+
+A controlled outage was created with:
+
+`sudo systemctl stop sre-service`
+
+During the outage:
+
+- The health endpoint became unavailable.
+- The monitor recorded failed checks.
+- The consecutive failure count increased.
+- The monitor emitted its threshold alert after three consecutive failures.
+- Failed checks published `Availability = 0` and `Failures = 1` to CloudWatch.
+- The CloudWatch failure alarm entered the alarm state.
+- Amazon SNS delivered the alarm notification to the confirmed email subscription.
+
+### Recovery
+
+The service was restored with:
+
+`sudo systemctl start sre-service`
+
+After recovery:
+
+- systemd reported the service as active.
+- Nginx again returned HTTP 200 from `/health`.
+- The synthetic monitor detected the successful response.
+- The consecutive failure count reset to zero.
+- Healthy measurements resumed in CloudWatch.
+
+### Result
+
+The test demonstrated the complete monitoring and alerting path:
+
+`Application outage -> synthetic check failure -> CloudWatch custom metric -> CloudWatch alarm -> SNS notification -> service restoration -> health-check recovery`
+
+The test also confirmed that the monitoring system could distinguish a healthy state, sustained application failure, and subsequent recovery.

@@ -343,3 +343,58 @@ A controlled outage demonstrated:
 - Reset of the consecutive failure count after recovery.
 
 This checkpoint establishes the EC2, FastAPI, Uvicorn, systemd, and synthetic monitoring foundation. Nginx, CloudWatch custom metrics and alarms, and SNS alert routing remain future deployment steps.
+## AWS Reliability Deployment
+
+The project was deployed to an Ubuntu EC2 instance with the following request path:
+
+`Internet -> Nginx :80 -> Uvicorn 127.0.0.1:8000 -> FastAPI /health`
+
+### Process Management
+
+Uvicorn runs as a systemd-managed service. The service is enabled during normal system boot and configured with `Restart=on-failure`.
+
+### Synthetic Monitoring
+
+`monitor/monitor.py` performs recurring HTTP health checks and records structured JSON events including:
+
+- HTTP status
+- request duration
+- consecutive failures
+- threshold alerts
+- recovery to a healthy state
+
+With `--cloudwatch` enabled, the monitor publishes:
+
+- `Availability`
+- `LatencyMs`
+- `Failures`
+
+to the custom CloudWatch namespace `SREPlatform`.
+
+### Observability and Alerting
+
+A CloudWatch dashboard visualizes the custom application metrics.
+
+A CloudWatch alarm monitors application failures and routes alarm notifications through Amazon SNS to a confirmed email subscription.
+
+### Failure Testing
+
+Controlled application outages were used to validate the monitoring path.
+
+Testing demonstrated:
+
+1. Healthy HTTP 200 responses through Nginx.
+2. Detection of application unavailability.
+3. Consecutive failure tracking.
+4. Local threshold alerting after three failures.
+5. Failed application measurements appearing in CloudWatch.
+6. CloudWatch alarm activation.
+7. SNS alarm notification delivery.
+8. Successful service restoration.
+9. Health-check recovery and reset of the consecutive failure count.
+
+Detailed results are recorded in `incidents/failure-tests.md`.
+
+### Current Scope
+
+This is intentionally a small reliability-engineering project rather than a production application. The focus is deployment, process supervision, health monitoring, observability, failure injection, alerting, and recovery.
