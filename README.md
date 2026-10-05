@@ -207,6 +207,18 @@ After restoration:
 - the consecutive failure count reset to zero
 - healthy CloudWatch measurements resumed
 
+### Test Evidence
+
+The controlled outage produced a sustained failure signal in CloudWatch, triggered the configured failure alarm, and delivered an SNS email notification.
+
+#### CloudWatch failure alarm
+
+![CloudWatch failure alarm showing the controlled outage and recovery](docs/images/cloudwatch-alarm.png)
+
+#### SNS alarm notification
+
+![SNS email notification after the CloudWatch alarm entered ALARM state](docs/images/sns-notification.png)
+
 Detailed failure-test notes are available in `incidents/failure-tests.md`.
 
 ## Running Locally
