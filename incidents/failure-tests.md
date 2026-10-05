@@ -1,184 +1,57 @@
-# Local failure exercises and evidence
+# Failure Testing Report
 
-Use the README to create `.venv`, install dependencies, and start the service and
-monitor in separate VS Code terminals. These are instructions, not claims that every
-scenario below has passed. Record your observations at the bottom after each run.
+This document records the primary reliability tests performed against the deployed AWS environment.
 
-## Healthy response
+## Test 1 — Automatic Process Recovery
 
-Before starting the monitor in its terminal, run:
+### Purpose
 
-```sh
-curl -i http://127.0.0.1:8000/health
-```
+Verify that systemd automatically recovers the application from an unexpected Uvicorn process failure.
 
-Expect HTTP 200 and `{"status":"healthy"}`. Then start the monitor:
+### Failure Injection
 
-```sh
-mkdir -p logs
-python monitor/monitor.py | tee -a logs/monitor.log
-```
+The main service process was forcibly terminated with SIGKILL to simulate an unexpected process crash.
 
-Expect `check` records with `success: true`, status 200, and failure count zero.
+### Expected Behavior
 
-## Outage and cooldown
+Because `sre-service` is configured with:
 
-1. Press Control+C in the service terminal only.
-2. Watch the monitor record failures 1, 2, and 3. Each attempt gets its own record.
-3. Verify the third failure also produces an `alert` record.
-4. Leave the service stopped for at least 65 seconds after the first alert.
-5. Compare alert timestamps: the next alert must be at least 60 seconds later.
+- `Restart=on-failure`
+- `RestartSec=5`
 
-The first failure may wait for the normal five-second interval. Subsequent failures
-retry after one second, plus request time. Continue logging even during cooldown.
+systemd should recognize the unexpected termination as a failure and automatically start a replacement process.
 
-## Recovery
+### Result
 
-In the service terminal:
+The test passed:
 
-```sh
-python -m uvicorn service.main:app --host 127.0.0.1 --port 8000
-```
+- the Uvicorn process was forcibly terminated
+- systemd detected the process failure
+- systemd automatically restarted the service
+- `sre-service` returned to the active state
+- `/health` returned HTTP 200 after recovery
 
-Expect the next successful check to reset the failure count to zero. A successful
-`check` record is the recovery evidence; this version has no separate recovery event.
+This demonstrates automatic process-level recovery without manual service restoration.
 
-## Temporary failure without an alert
+## Test 2 — End-to-End Controlled Outage
 
-For a less rushed manual exercise, stop the monitor with Control+C and restart it:
+### Purpose
 
-```sh
-python monitor/monitor.py --interval 1 --retry-delay 10 | tee -a logs/monitor.log
-```
-
-With the service initially healthy, stop it. After the first failed check appears,
-restart the service within ten seconds. The next check should succeed and reset the
-count. That isolated failure must not produce an alert. If you miss the timing,
-repeat the exercise. Restore default monitor settings afterward by restarting it
-without the timing options.
-
-## HTTP error rather than a stopped process
-
-Keep the service running. Stop the monitor and run:
-
-```sh
-python monitor/monitor.py --url http://127.0.0.1:8000/missing | tee -a logs/monitor.log
-```
-
-`/missing` is intentionally not a route. Expect HTTP 404 in failed check records,
-then an alert at count three. This differs from connection refused: here the service
-answered HTTP but the requested endpoint did not succeed. Stop this monitor and
-restart with the default `/health` URL when finished.
-
-## Faster cooldown demonstration
-
-```sh
-python monitor/monitor.py --interval 1 --retry-delay 1 --cooldown 5 | tee -a logs/monitor.log
-```
-
-Use this instead of the default monitor command for a shorter exercise. Stop the
-service, observe the first alert after three failures, and verify repeat alerts are
-at least five seconds apart. Record the custom settings with your evidence so the
-shorter interval is not mistaken for a failure of the default 60-second cooldown.
-
-## Automated checks, including simulated timeout
-
-Stop the monitor, then run:
-
-```sh
-python -m unittest discover -s tests -v
-```
-
-Expect four tests and `OK`. The timeout case injects `TimeoutError`; it verifies
-error handling without requiring a real stalled server. Stopping uvicorn normally
-causes connection refused, which is a different failure mode from a timeout.
-
-## Evidence record
-
-Copy this block for each exercise and fill it with actual observations. Keep raw
-log lines unchanged and compare UTC timestamps when measuring cooldown.
-
-```text
-Date/time and time zone:
-Scenario:
-Service command and port:
-Monitor command and settings:
-Action performed:
-Expected result:
-Observed result:
-Relevant JSON lines or their timestamps:
-Pass/fail:
-What I learned or would investigate next:
-```
-
-Do not claim cloud reliability from these local checks. Finish by stopping both
-processes with Control+C in their respective terminals. Leave the logs available
-for review; `tee -a` will append on the next run.
-## AWS EC2 End-to-End Failure Test
-
-### Environment
-
-The service was deployed to an Ubuntu EC2 instance.
-
-Request path:
-
-`Client -> Nginx :80 -> Uvicorn 127.0.0.1:8000 -> FastAPI /health`
-
-Uvicorn was managed by systemd using `sre-service.service`.
-
-The Python synthetic monitor published custom application metrics to Amazon CloudWatch under the `SREPlatform` namespace:
-
-- `Availability`
-- `LatencyMs`
-- `Failures`
-
-A CloudWatch alarm monitored the failure metric and routed alarm notifications through an Amazon SNS topic with a confirmed email subscription.
+Verify the complete monitoring, alerting, notification, restoration, and recovery path.
 
 ### Healthy State
 
 Before failure injection:
 
-- `sre-service` was active.
-- Nginx successfully proxied `/health` to Uvicorn.
-- `/health` returned HTTP 200.
-- The synthetic monitor reported successful checks.
-- Consecutive failures remained at zero.
-- Healthy measurements were published to CloudWatch.
+- `sre-service` was active
+- Nginx successfully proxied `/health` to Uvicorn
+- `/health` returned HTTP 200
+- the synthetic monitor reported successful checks
+- healthy measurements were published to CloudWatch
 
 ### Failure Injection
 
-A controlled outage was created with:
+The application was intentionally stopped with:
 
-`sudo systemctl stop sre-service`
-
-During the outage:
-
-- The health endpoint became unavailable.
-- The monitor recorded failed checks.
-- The consecutive failure count increased.
-- The monitor emitted its threshold alert after three consecutive failures.
-- Failed checks published `Availability = 0` and `Failures = 1` to CloudWatch.
-- The CloudWatch failure alarm entered the alarm state.
-- Amazon SNS delivered the alarm notification to the confirmed email subscription.
-
-### Recovery
-
-The service was restored with:
-
-`sudo systemctl start sre-service`
-
-After recovery:
-
-- systemd reported the service as active.
-- Nginx again returned HTTP 200 from `/health`.
-- The synthetic monitor detected the successful response.
-- The consecutive failure count reset to zero.
-- Healthy measurements resumed in CloudWatch.
-
-### Result
-
-The test demonstrated the complete monitoring and alerting path:
-
-`Application outage -> synthetic check failure -> CloudWatch custom metric -> CloudWatch alarm -> SNS notification -> service restoration -> health-check recovery`
-
-The test also confirmed that the monitoring system could distinguish a healthy state, sustained application failure, and subsequent recovery.
+```bash
+sudo systemctl stop sre-service

@@ -144,6 +144,21 @@ Email notification
 
 This path was tested end-to-end during a controlled application outage.
 
+## Automatic Process Recovery Test
+
+Process-level recovery was tested separately from the controlled outage test.
+
+The Uvicorn process was forcibly terminated with SIGKILL to simulate an unexpected process crash. Because `sre-service` is configured with `Restart=on-failure`, systemd detected the failed process and automatically started a replacement process after the configured restart delay.
+
+After the restart:
+
+- `sre-service` returned to the active state
+- Uvicorn was running again
+- `/health` returned HTTP 200
+
+This test demonstrates automatic process recovery. It is separate from the controlled outage test below, where `systemctl stop` intentionally keeps the service stopped until manual restoration.
+
+Boot persistence was also verified separately by restarting the EC2 instance and confirming that the enabled systemd service started during normal boot and `/health` returned HTTP 200.
 ## Controlled Failure Test
 
 The deployed system was tested by deliberately creating an application outage.

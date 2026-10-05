@@ -34,7 +34,21 @@ The unit:
 
 Boot persistence was verified by restarting the EC2 instance and confirming that the service returned active and `/health` returned HTTP 200.
 
-The controlled outage test used an intentional `systemctl stop` followed by manual restoration. Therefore, that test demonstrates outage detection and recovery monitoring, not automatic crash recovery.
+Three separate reliability behaviors were tested.
+
+### Automatic Process Recovery
+
+The Uvicorn process was forcibly terminated with SIGKILL to simulate an unexpected process failure. systemd detected the failure and automatically restarted the service because the unit is configured with `Restart=on-failure`. After the restart, the service returned active and `/health` returned HTTP 200.
+
+### Controlled Application Outage
+
+The application was intentionally stopped with `systemctl stop sre-service`. Unlike an unexpected process crash, this administrative stop kept the service unavailable. This allowed the synthetic monitor, CloudWatch alarm, and SNS notification path to be tested. The service was then manually restored with `systemctl start sre-service`, and the monitor detected recovery.
+
+### Boot Persistence
+
+The EC2 instance was restarted and the enabled systemd service started during normal boot. The service returned active and `/health` returned HTTP 200.
+
+These tests demonstrate three different behaviors: automatic recovery from an unexpected process failure, monitoring and alerting during a sustained application outage, and service persistence across host restart.
 
 ## Synthetic Monitor
 
