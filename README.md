@@ -1,5 +1,11 @@
 # Site Reliability Platform
 
+## Demo
+
+A walkthrough of the deployed system covering automatic process recovery, synthetic monitoring, controlled failure injection, CloudWatch/SNS alerting, manual restoration, and recovery detection.
+
+**[Watch the project demo on LinkedIn](https://lnkd.in/p/gpG-f3v8)**
+
 A hands-on site reliability engineering project focused on deploying, monitoring, testing, and recovering a web service on AWS.
 
 The application itself is intentionally minimal. The focus is the reliability layer around it: Linux service management, reverse proxying, synthetic monitoring, observability, alerting, failure testing, and recovery.
