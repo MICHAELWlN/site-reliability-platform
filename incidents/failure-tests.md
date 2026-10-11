@@ -55,3 +55,36 @@ The application was intentionally stopped with:
 
 ```bash
 sudo systemctl stop sre-service
+```
+
+During the outage:
+
+- The health endpoint became unavailable.
+- The monitor recorded failed checks.
+- The consecutive failure count increased.
+- The monitor emitted its threshold alert after three consecutive failures.
+- Failed checks published `Availability = 0` and `Failures = 1` to CloudWatch.
+- The CloudWatch failure alarm entered the alarm state.
+- Amazon SNS delivered the alarm notification to the confirmed email subscription.
+
+### Recovery
+
+The service was restored with:
+
+`sudo systemctl start sre-service`
+
+After recovery:
+
+- systemd reported the service as active.
+- Nginx again returned HTTP 200 from `/health`.
+- The synthetic monitor detected the successful response.
+- The consecutive failure count reset to zero.
+- Healthy measurements resumed in CloudWatch.
+
+### Result
+
+The test demonstrated the complete monitoring and alerting path:
+
+`Application outage -> synthetic check failure -> CloudWatch custom metric -> CloudWatch alarm -> SNS notification -> service restoration -> health-check recovery`
+
+The test also confirmed that the monitoring system could distinguish a healthy state, sustained application failure, and subsequent recovery.
