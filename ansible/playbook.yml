@@ -1,0 +1,38 @@
+---
+# Install and configure Nginx on the isolated test container.
+# Only native ansible.builtin modules are used, so every task reports "ok" on a second run.
+- name: Configure Nginx demo web server
+  hosts: web
+  vars:
+    nginx_port: 80
+    nginx_message: SRE Platform Ansible demo
+
+  tasks:
+    - name: Install Nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Deploy Nginx configuration
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: "0644"
+        # Never install a config that Nginx itself rejects.
+        validate: nginx -t -c %s
+      notify: Reload nginx
+
+    - name: Ensure Nginx is running
+      ansible.builtin.service:
+        name: nginx
+        state: started
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded

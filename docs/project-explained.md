@@ -144,6 +144,44 @@ After restoration:
 
 Detailed results are documented in `incidents/failure-tests.md`.
 
+## Additional Tooling
+
+The sections above describe the AWS EC2 deployment, which was built and configured by hand. The tools below are
+separate from it. Docker, Jenkins, Terraform, and Ansible are demonstrations: none of them deploys to,
+provisions, or configures the EC2 instance.
+
+### Docker (local)
+
+`Dockerfile` builds a container image of the FastAPI service. Verified locally: the image built, the container's
+health status became `healthy`, `GET /health` returned HTTP 200, and the container ran as a non-root user.
+The EC2 deployment still runs under systemd.
+
+### Jenkins (local)
+
+A local Jenkins LTS with a Docker-in-Docker sidecar runs `Jenkinsfile`. Build #2 succeeded: seven stages executed
+(checkout, dependency install, tests, image build, temporary container deployment, health verification, and
+cleanup), the 4 unit tests passed, `/health` returned HTTP 200, and the temporary local container was removed.
+The pipeline never deploys to AWS. See `jenkins/README.md`.
+
+### Terraform (isolated demonstration)
+
+`terraform/demo/` defined one isolated security group with no rules. It was applied (1 added, 0 changed,
+0 destroyed), verified in AWS, checked for drift (none), and then destroyed. Afterwards `terraform state list`
+was empty and AWS returned `InvalidGroup.NotFound` for the group. Terraform does not manage the EC2 instance or
+any other existing resource. See `terraform/demo/README.md`.
+
+### Ansible (local)
+
+`ansible/` configures Nginx on a throwaway Ubuntu container. The first run reported `changed=4`, the second
+`changed=0`, `nginx -t` passed, and the endpoint returned HTTP 200. It does not configure the EC2 instance.
+See `ansible/README.md`.
+
+### Datadog (external)
+
+A Datadog Synthetic HTTP test checks `/health` on the EC2 endpoint every 15 minutes from one AWS Ohio location.
+Two executions passed, all three assertions passed, and the monitor status is OK. Failure alerting and recovery
+have not been verified. See `docs/datadog-monitoring.md`.
+
 ## Design Decisions
 
 ### Minimal Application
@@ -206,10 +244,11 @@ It currently does not provide:
 
 - TLS
 - high availability or multiple EC2 instances
-- infrastructure as code
-- automated deployment
+- infrastructure as code for the EC2 deployment (Terraform was demonstrated only on one isolated security group, since destroyed)
+- configuration management of the EC2 instance (the Ansible demonstration targets a local container)
+- automated deployment to EC2 (the Jenkins pipeline is local and does not deploy to AWS)
 - centralized log aggregation
-- external monitoring from a separate host
+- verified external alerting (a Datadog synthetic check exists, but failure alerting and recovery have not been verified)
 - application authentication
 - dependency-level health checks
 
@@ -219,12 +258,13 @@ The current IAM permissions can also be tightened further toward least privilege
 
 Logical next steps include:
 
-- infrastructure as code
+- extending infrastructure as code to the EC2 deployment
+- configuration management of the EC2 instance
 - least-privilege IAM
 - TLS
-- automated deployment
+- automated deployment to EC2 from CI
 - centralized logging
-- external monitoring
+- verifying Datadog failure alerting and recovery
 - additional failure scenarios
 - dependency-aware health checks
 - automated integration testing

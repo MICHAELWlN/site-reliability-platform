@@ -1,0 +1,27 @@
+# Keep the build context small and keep secrets and local state out of images.
+# "**/" makes each pattern match at any directory depth, not only the context root.
+
+# Version control
+.git
+
+# Local virtual environments
+.venv
+venv
+
+# Python bytecode
+**/__pycache__
+**/*.pyc
+
+# Secrets
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+
+# Local logs
+logs
+
+# Terraform state and local working files
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform

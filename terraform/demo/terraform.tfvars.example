@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (ignored by Git) and set your own values:
+#   cp terraform.tfvars.example terraform.tfvars
+
+# Existing VPC that will contain the demonstration security group.
+vpc_id = "vpc-0123456789abcdef0"
+
+# Optional overrides; these are the defaults.
+# aws_region  = "us-east-2"
+# aws_profile = "sre-lab"

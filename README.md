@@ -43,9 +43,41 @@ Amazon SNS
 Email notification
 ```
 
+External monitoring (verified for the success path only; see [Datadog External Monitoring](#datadog-external-monitoring)):
+
+```text
+Datadog Synthetic HTTP test (AWS Ohio location, every 15 minutes)
+   |
+   v
+Public endpoint on the EC2 instance: GET /health
+```
+
 The service runs on an Ubuntu EC2 instance. Uvicorn is bound to localhost, while Nginx provides the public HTTP entry point on port 80.
 
+## What Runs Where
+
+**Deployed on AWS (the EC2 instance and AWS services)**
+
+- FastAPI service under Uvicorn and systemd, behind Nginx on port 80
+- Python synthetic monitor
+- CloudWatch custom metrics, dashboard, and alarm; SNS email notification; EC2 IAM role
+
+This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform, Ansible, or Jenkins.
+
+**External service**
+
+- A Datadog Synthetic HTTP test that probes the EC2 endpoint from outside AWS. It is configured in the Datadog UI.
+
+**Local demonstrations (not deployed to AWS)**
+
+- **Docker:** the FastAPI service runs in a container on a local machine.
+- **Jenkins:** a CI pipeline runs on a local Jenkins and deploys only a temporary local container.
+- **Ansible:** a playbook configures Nginx in a throwaway local Ubuntu container, not on EC2.
+- **Terraform:** a small demo created, verified, and destroyed one isolated security group. It does not manage the EC2 instance.
+
 ## Technologies
+
+AWS deployment:
 
 - Python
 - FastAPI
@@ -58,6 +90,17 @@ The service runs on an Ubuntu EC2 instance. Uvicorn is bound to localhost, while
 - Amazon SNS
 - boto3
 - Git / GitHub
+
+Local demonstrations:
+
+- Docker
+- Jenkins LTS (with a Docker-in-Docker sidecar)
+- Terraform
+- Ansible
+
+External monitoring:
+
+- Datadog Synthetic Monitoring
 
 ## Service
 
@@ -227,6 +270,72 @@ The controlled outage produced a sustained failure signal in CloudWatch, trigger
 
 Detailed failure-test notes are available in `incidents/failure-tests.md`.
 
+## Docker
+
+*Local demonstration. Not used for the EC2 deployment, which runs under systemd.*
+
+`Dockerfile` builds an image of the FastAPI service: `python:3.12-slim`, a non-root user, only `service/` and
+`requirements.txt` copied in, Uvicorn on `0.0.0.0:8000`, and a Python `urllib` `HEALTHCHECK` against `/health`.
+`.dockerignore` keeps `.git`, virtual environments, `.env` files, keys, logs, and Terraform state out of the build.
+
+Verified locally: the image built, the container's health status became `healthy`, the container ran as a
+non-root user, and `GET /health` returned HTTP 200 with `{"status":"healthy"}`. The image is not pushed to any registry.
+
+## Jenkins CI
+
+*Local demonstration. Jenkins does not deploy to AWS.*
+
+`Jenkinsfile` and `jenkins/` run Jenkins LTS in Docker, bound to `127.0.0.1:8080`, with a TLS Docker-in-Docker
+sidecar so no host Docker socket is mounted. The pipeline checks out the committed branch from the local Git
+repository and runs seven stages: Checkout, Install Dependencies, Test (the 4 unit tests), Build Image (the
+existing `Dockerfile`), Deploy Temporary Container (a local container on an isolated port), Verify Health
+(`GET /health` must return HTTP 200), and cleanup.
+
+**Build #2: SUCCESS.** All stages ran, the health check returned HTTP 200, and the temporary container and image were removed.
+
+Limits: the pipeline never touches AWS or the EC2 instance, pushes to no registry, uses no credentials, and is
+not triggered by GitHub. It relies on a lab-only Jenkins setting (`ALLOW_LOCAL_CHECKOUT`) that must not be used
+on a shared Jenkins. See `jenkins/README.md`.
+
+## Terraform
+
+*Small demonstration. Terraform does not manage the EC2 instance.*
+
+`terraform/demo/` defines one resource: an isolated security group named `sre-terraform-demo` in an existing
+VPC in `us-east-2`, with no inbound or outbound rules and nothing attached to it.
+
+It was planned and applied once (1 resource added), verified with the AWS CLI (name, VPC, tags, and zero rules),
+checked for drift (no differences), and later destroyed. After the destroy, `terraform state list` was empty
+and AWS returned `InvalidGroup.NotFound` for the group. The existing EC2 instance, security groups,
+Nginx, systemd, CloudWatch, and SNS were not managed, imported, or modified. State is local and not committed.
+See `terraform/demo/README.md`.
+
+## Ansible
+
+*Local demonstration. The playbook does not configure the EC2 instance.*
+
+`ansible/` contains an inventory, a playbook, and a template that install and configure Nginx on a throwaway,
+unprivileged Ubuntu 24.04 container, reached with `docker exec` and published only on `127.0.0.1:18080`.
+
+Verified: the first run reported `changed=4`, the second run reported `changed=0`, `nginx -t` passed, and the
+endpoint returned HTTP 200. It uses its own demo Nginx config and does not touch `deploy/nginx.conf` or
+`deploy/sre-service.service`. See `ansible/README.md`.
+
+## Datadog External Monitoring
+
+*External SaaS check of the AWS deployment, configured in the Datadog UI.*
+
+A Datadog Synthetic HTTP test sends `GET /health` to the EC2 application's public endpoint every 15 minutes
+from one AWS Ohio location. Its assertions are status code `200`, response time below 2000 ms, and
+`Content-Type: application/json`.
+
+**Verified:** two executions (one scheduled, one manual) both passed, with HTTP 200 and response times of about
+7 to 10 ms. The Datadog monitor status is OK.
+
+**Not yet verified:** failure detection, alert notifications, and recovery. The test has only been observed
+passing. See `docs/datadog-monitoring.md` for the comparison with the Python monitor and CloudWatch, and for
+the full list of limitations.
+
 ## Running Locally
 
 Create a virtual environment:
@@ -266,6 +375,24 @@ On the AWS deployment, CloudWatch publishing can be enabled with:
 python monitor/monitor.py --url http://127.0.0.1/health --cloudwatch
 ```
 
+Run the unit tests:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Build and run the container locally (bound to loopback only):
+
+```bash
+docker build -t sre-platform:demo .
+docker run -d --name sre-platform-demo -p 127.0.0.1:18000:8000 sre-platform:demo
+curl -i http://127.0.0.1:18000/health
+docker rm -f sre-platform-demo
+```
+
+The Jenkins, Terraform, and Ansible demonstrations have their own instructions in `jenkins/README.md`,
+`terraform/demo/README.md`, and `ansible/README.md`.
+
 ## Repository Structure
 
 ```text
@@ -275,13 +402,33 @@ site-reliability-platform/
 ├── monitor/
 │   └── monitor.py
 ├── tests/
-├── deploy/
+│   └── test_monitor.py
+├── deploy/                  # EC2 deployment files
 │   ├── nginx.conf
 │   └── sre-service.service
+├── Dockerfile               # local container image of the service
+├── .dockerignore
+├── Jenkinsfile              # local CI pipeline
+├── jenkins/                 # local Jenkins + Docker-in-Docker setup
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── README.md
+├── terraform/demo/          # isolated security group demo
+│   ├── *.tf
+│   ├── .terraform.lock.hcl
+│   ├── terraform.tfvars.example
+│   └── README.md
+├── ansible/                 # Nginx configuration demo on a local container
+│   ├── inventory.ini
+│   ├── playbook.yml
+│   ├── templates/nginx.conf.j2
+│   └── README.md
 ├── incidents/
 │   └── failure-tests.md
 ├── docs/
-│   └── project-explained.md
+│   ├── images/
+│   ├── project-explained.md
+│   └── datadog-monitoring.md
 ├── requirements.txt
 └── README.md
 ```
@@ -304,5 +451,18 @@ It demonstrates:
 - SNS email notification
 - controlled failure injection
 - service restoration and recovery detection
+- local containerization with Docker
+- a local Jenkins CI pipeline (tests, image build, temporary container, health check, cleanup)
+- infrastructure as code with Terraform, limited to one isolated demo security group
+- idempotent configuration management with Ansible on a local container
+- an external Datadog synthetic check (success path only)
 
-Potential improvements include infrastructure as code, tighter least-privilege IAM, TLS, automated deployment, centralized logging, external monitoring, and additional failure scenarios.
+It does **not** currently:
+
+- deploy anything to AWS through Jenkins
+- manage the EC2 instance, its security groups, Nginx, systemd, CloudWatch, or SNS with Terraform
+- configure the EC2 instance with Ansible
+- provide verified Datadog failure detection, alert notifications, or recovery
+- provide TLS, high availability, or centralized log aggregation
+
+Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, automated deployment to EC2 from CI, tighter least-privilege IAM, TLS, centralized logging, verifying Datadog alerting and recovery, and additional failure scenarios.

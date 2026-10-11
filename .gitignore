@@ -223,3 +223,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Terraform: local state, provider cache, plans, and real variable values.
+# Keep .terraform.lock.hcl and *.tfvars.example tracked.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan*
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Credentials and private keys
+.env.*
+!.env.example
+*.pem
+*.key

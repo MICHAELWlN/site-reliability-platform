@@ -1,0 +1,61 @@
+# Local-only Jenkins LTS for the pipeline in ../Jenkinsfile.
+#
+# Security model:
+# - Jenkins is published on 127.0.0.1:8080 only. The agent port (50000) is not published.
+# - The host Docker socket is NOT mounted into any container.
+# - Jenkins talks over TLS to a separate Docker-in-Docker daemon ("docker" below).
+#   That daemon must run privileged; the privilege is confined to that one sidecar,
+#   which publishes no ports and has no host bind mounts.
+# - The only host path shared is this repository's .git directory, read-only,
+#   so Jenkins can check out committed code (and nothing else).
+#
+# Start:   docker compose -f jenkins/docker-compose.yml up -d --build
+# Remove:  docker compose -f jenkins/docker-compose.yml down -v
+
+name: sre-jenkins
+
+services:
+  docker:
+    image: docker:29-dind
+    container_name: sre-jenkins-dind
+    privileged: true # Required by dind. See the security model above.
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+    volumes:
+      - dind-certs-ca:/certs/ca
+      - dind-certs-client:/certs/client
+      - dind-data:/var/lib/docker
+    networks:
+      - ci
+
+  jenkins:
+    build: .
+    image: sre-jenkins:lts
+    container_name: sre-jenkins
+    depends_on:
+      - docker
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      # Lab-only exception: the Git plugin refuses file:// remotes by default. The only
+      # local path Jenkins can reach is the read-only .git mount at /srv/repo.git (see volumes).
+      # Do not copy this setting to a Jenkins that is reachable by other users or networks.
+      JAVA_OPTS: "-Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
+      DOCKER_HOST: tcp://docker:2376
+      DOCKER_CERT_PATH: /certs/client
+      DOCKER_TLS_VERIFY: "1"
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - dind-certs-client:/certs/client:ro
+      - ../.git:/srv/repo.git:ro
+    networks:
+      - ci
+
+networks:
+  ci: {}
+
+volumes:
+  jenkins-home: {}
+  dind-certs-ca: {}
+  dind-certs-client: {}
+  dind-data: {}

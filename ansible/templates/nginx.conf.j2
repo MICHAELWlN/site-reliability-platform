@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# Minimal demo configuration: every request gets HTTP 200 and a short text body.
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log;
+
+events {
+    worker_connections 512;
+}
+
+http {
+    access_log /var/log/nginx/access.log;
+
+    server {
+        listen {{ nginx_port }};
+        server_name _;
+
+        location / {
+            default_type text/plain;
+            return 200 "{{ nginx_message }}\n";
+        }
+    }
+}
