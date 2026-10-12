@@ -9,10 +9,11 @@ each other.
 
 ## Status
 
-- **Planned only.** `terraform plan` has been reviewed. `terraform apply` has not been
-  run, so the repository does not exist yet.
-- **Jenkins deployment integration is not implemented.** The `Jenkinsfile` still
-  builds and tests the image locally and does not push to ECR or deploy to AWS.
+- **Repository exists.** It is the private repository Jenkins publishes to. This directory
+  was not changed by the Jenkins integration work.
+- **Jenkins publishes images here and does not deploy.** After tests and a local health
+  check, the pipeline pushes a `linux/amd64` image tagged with the full commit SHA.
+  See `jenkins/README.md`. Nothing is pulled or run on EC2.
 - **EC2 is unchanged.** The existing instance still runs the application from the
   hand-built systemd and Nginx setup. Nothing in this directory touches it.
 
@@ -95,25 +96,21 @@ expect to grant the following before applying (this configuration does not grant
 This list is the expected set for these two resources, not a result that has been
 tested. Confirm it against the real apply.
 
-## Intended future flow (not implemented)
+## How images get here
 
-### Jenkins pushes images
+### Jenkins pushes images (verified)
 
-A later phase would extend the pipeline so that, after the tests and the local
-health check pass, Jenkins would:
+After the unit tests and the local health check pass, the pipeline in `../Jenkinsfile`:
 
-1. Authenticate to ECR with a short-lived token from `aws ecr get-login-password`.
-2. Tag the image `<repository_url>:<unique tag>`.
-3. Push it.
+1. Checks that the caller is `assumed-role/sre-jenkins-deploy-role`.
+2. Authenticates with `aws ecr get-login-password` piped to `docker login --password-stdin`.
+3. Pushes `linux/amd64` as `<repository_url>:<full commit SHA>` when that tag is absent.
 
-This needs a dedicated, least-privilege identity for Jenkins that is allowed
-`ecr:GetAuthorizationToken` and the push actions on this repository only. That
-identity, and how Jenkins would hold its credentials, have not been designed or
-created. Tags must be unique because the repository is immutable. The current
-pipeline tag, `ci-${BUILD_NUMBER}`, restarts from 1 if Jenkins is rebuilt, so a Git
-commit SHA would be a safer tag for pushes.
+Tags are immutable. A later build of the same commit reuses the image only after the digest matches.
+The role session is short-lived and is removed when the build ends. Build #4 of the temporary Jenkins
+job published one image this way. See `jenkins/README.md`.
 
-### EC2 pulls images
+### EC2 pulls images (not implemented)
 
 The EC2 instance role already includes `AmazonEC2ContainerRegistryReadOnly`, which
 permits pulling from ECR in the account without any stored keys. A later phase would

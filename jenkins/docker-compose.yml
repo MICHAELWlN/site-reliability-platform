@@ -8,6 +8,8 @@
 #   which publishes no ports and has no host bind mounts.
 # - The only host path shared is this repository's .git directory, read-only,
 #   so Jenkins can check out committed code (and nothing else).
+# - ~/.aws is NOT mounted. Short-lived AWS credentials, when loaded, live only in an
+#   in-memory tmpfs (/run/aws-creds). See "AWS credential handoff" in README.md.
 #
 # Start:   docker compose -f jenkins/docker-compose.yml up -d --build
 # Remove:  docker compose -f jenkins/docker-compose.yml down -v
@@ -44,10 +46,17 @@ services:
       DOCKER_HOST: tcp://docker:2376
       DOCKER_CERT_PATH: /certs/client
       DOCKER_TLS_VERIFY: "1"
+      # Non-secret AWS settings only. Credentials are never set here: they are streamed into
+      # the tmpfs below by jenkins/aws-creds-handoff.sh and read through credential_process.
+      AWS_CONFIG_FILE: /usr/local/etc/aws/config
+      AWS_EC2_METADATA_DISABLED: "true"
     volumes:
       - jenkins-home:/var/jenkins_home
       - dind-certs-client:/certs/client:ro
       - ../.git:/srv/repo.git:ro
+    tmpfs:
+      # In-memory only (never on a volume or the host disk), owner-only, gone on restart.
+      - /run/aws-creds:mode=0700,uid=1000,gid=1000,size=1m,noexec,nosuid,nodev
     networks:
       - ci
 

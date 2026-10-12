@@ -62,7 +62,11 @@ The service runs on an Ubuntu EC2 instance. Uvicorn is bound to localhost, while
 - Python synthetic monitor
 - CloudWatch custom metrics, dashboard, and alarm; SNS email notification; EC2 IAM role
 
-This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform, Ansible, or Jenkins.
+This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform, Ansible, or Jenkins. Jenkins does not deploy to this instance.
+
+**AWS, separate from the EC2 application**
+
+- A private ECR repository named `sre-platform` in `us-east-2`. Jenkins publishes `linux/amd64` images to it. Nothing pulls or runs those images on EC2.
 
 **External service**
 
@@ -71,7 +75,7 @@ This deployment was built and configured by hand. It is **not** provisioned or c
 **Local demonstrations (not deployed to AWS)**
 
 - **Docker:** the FastAPI service runs in a container on a local machine.
-- **Jenkins:** a CI pipeline runs on a local Jenkins and deploys only a temporary local container.
+- **Jenkins:** a local pipeline tests the service, checks a temporary local container, then publishes a `linux/amd64` image to the private ECR repository. It does not deploy to EC2.
 - **Ansible:** a playbook configures Nginx in a throwaway local Ubuntu container, not on EC2.
 - **Terraform:** a small demo created, verified, and destroyed one isolated security group. It does not manage the EC2 instance.
 
@@ -94,7 +98,7 @@ AWS deployment:
 Local demonstrations:
 
 - Docker
-- Jenkins LTS (with a Docker-in-Docker sidecar)
+- Jenkins LTS (with a Docker-in-Docker sidecar) publishing to Amazon ECR
 - Terraform
 - Ansible
 
@@ -279,23 +283,40 @@ Detailed failure-test notes are available in `incidents/failure-tests.md`.
 `.dockerignore` keeps `.git`, virtual environments, `.env` files, keys, logs, and Terraform state out of the build.
 
 Verified locally: the image built, the container's health status became `healthy`, the container ran as a
-non-root user, and `GET /health` returned HTTP 200 with `{"status":"healthy"}`. The image is not pushed to any registry.
+non-root user, and `GET /health` returned HTTP 200 with `{"status":"healthy"}`. A plain local `docker build` does not
+push anywhere. Jenkins publishes a separate `linux/amd64` image to ECR.
 
 ## Jenkins CI
 
-*Local demonstration. Jenkins does not deploy to AWS.*
+*Local Jenkins. It publishes images to a private ECR repository. It does not deploy to EC2.*
 
 `Jenkinsfile` and `jenkins/` run Jenkins LTS in Docker, bound to `127.0.0.1:8080`, with a TLS Docker-in-Docker
-sidecar so no host Docker socket is mounted. The pipeline checks out the committed branch from the local Git
-repository and runs seven stages: Checkout, Install Dependencies, Test (the 4 unit tests), Build Image (the
-existing `Dockerfile`), Deploy Temporary Container (a local container on an isolated port), Verify Health
-(`GET /health` must return HTTP 200), and cleanup.
+sidecar. The host Docker socket is not mounted, and the controller is not privileged. Short-lived AWS credentials
+are loaded into an in-memory directory for a build and removed when the build ends. No access keys are stored in Git.
 
-**Build #2: SUCCESS.** All stages ran, the health check returned HTTP 200, and the temporary container and image were removed.
+The pipeline keeps the original local stages, then publishes. In order: Checkout, Install Dependencies, Test
+(the 4 unit tests), Build Image, Deploy Temporary Container, Verify Health (`GET /health` must return HTTP 200),
+Verify AWS Deployment Role (`assumed-role/sre-jenkins-deploy-role`), Publish Image to ECR (`linux/amd64`, tagged
+with the full commit SHA), Verify Image in ECR (digest, architecture, and revision label), then cleanup.
+Nothing is published unless the tests and the local health check pass. An existing immutable tag is reused only
+when its digest matches a publish record or an operator-supplied digest. Images are never overwritten or deleted
+by the pipeline.
 
-Limits: the pipeline never touches AWS or the EC2 instance, pushes to no registry, uses no credentials, and is
-not triggered by GitHub. It relies on a lab-only Jenkins setting (`ALLOW_LOCAL_CHECKOUT`) that must not be used
-on a shared Jenkins. See `jenkins/README.md`.
+**Build #2: SUCCESS** on job `sre-platform-ci` (local stages only, before ECR publishing).
+
+**Build #4: SUCCESS** on the temporary job `sre-platform-ci-ecr-test`, which built an isolated snapshot of this
+work (`110adbe1f0cdd3e355486b3dd415f5dea97a06c5`). That snapshot is not a commit in this repository. The 4 unit
+tests passed, the temporary container became healthy and returned HTTP 200, and ECR received
+`sre-platform:110adbe1f0cdd3e355486b3dd415f5dea97a06c5` with digest
+`sha256:5f6ab0e1caf0bc49ff1b9cb6cc14885a10b60847b8e4096405b00d7eee70755d`. The verify stage recorded
+`linux/amd64` and a matching source revision label. A later read-only `DescribeImages` returned that same digest.
+Credentials were removed at the end, and the temporary container was removed. The earlier image
+`43eb11cef129969bf70df72267950fb0b57ceac5` was left unchanged. EC2 was not modified. Job `sre-platform-ci` was not
+used for this build and still has its original history.
+
+Limits: publishing needs a short-lived role session loaded on the Mac before each build, so it is not unattended.
+The pipeline is not triggered by GitHub. It relies on a lab-only Jenkins setting (`ALLOW_LOCAL_CHECKOUT`) that
+must not be used on a shared Jenkins. See `jenkins/README.md`.
 
 ## Terraform
 
@@ -408,11 +429,14 @@ site-reliability-platform/
 │   └── sre-service.service
 ├── Dockerfile               # local container image of the service
 ├── .dockerignore
-├── Jenkinsfile              # local CI pipeline
-├── jenkins/                 # local Jenkins + Docker-in-Docker setup
+├── Jenkinsfile              # test, local health check, then publish to ECR
+├── jenkins/                 # local Jenkins, credential handoff, ECR publish helper
 │   ├── Dockerfile
 │   ├── docker-compose.yml
+│   ├── aws-creds-handoff.sh
+│   ├── ecr_publish_tool.py
 │   └── README.md
+├── terraform/deployment/    # private ECR repository (does not manage EC2)
 ├── terraform/demo/          # isolated security group demo
 │   ├── *.tf
 │   ├── .terraform.lock.hcl
@@ -452,14 +476,14 @@ It demonstrates:
 - controlled failure injection
 - service restoration and recovery detection
 - local containerization with Docker
-- a local Jenkins CI pipeline (tests, image build, temporary container, health check, cleanup)
+- a local Jenkins pipeline that tests the service, checks a temporary container, and publishes a `linux/amd64` image to a private ECR repository
 - infrastructure as code with Terraform, limited to one isolated demo security group
 - idempotent configuration management with Ansible on a local container
 - an external Datadog synthetic check (success path only)
 
 It does **not** currently:
 
-- deploy anything to AWS through Jenkins
+- deploy the application to EC2 through Jenkins (images are published to ECR only)
 - manage the EC2 instance, its security groups, Nginx, systemd, CloudWatch, or SNS with Terraform
 - configure the EC2 instance with Ansible
 - provide verified Datadog failure detection, alert notifications, or recovery

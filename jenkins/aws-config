@@ -1,0 +1,6 @@
+# Static AWS CLI configuration baked into the Jenkins image (no secrets).
+# Credentials come only from the helper below, which reads the tmpfs file written by
+# jenkins/aws-creds-handoff.sh and rejects missing, unsafe or expired credentials.
+[default]
+region = us-east-2
+credential_process = /usr/local/bin/jenkins-aws-credential-process

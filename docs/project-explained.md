@@ -147,8 +147,8 @@ Detailed results are documented in `incidents/failure-tests.md`.
 ## Additional Tooling
 
 The sections above describe the AWS EC2 deployment, which was built and configured by hand. The tools below are
-separate from it. Docker, Jenkins, Terraform, and Ansible are demonstrations: none of them deploys to,
-provisions, or configures the EC2 instance.
+separate from that instance. Docker and Ansible stay local. Terraform's EC2 demo was one isolated security group,
+since destroyed. Jenkins publishes images to a private ECR repository and does not deploy them to EC2.
 
 ### Docker (local)
 
@@ -158,10 +158,19 @@ The EC2 deployment still runs under systemd.
 
 ### Jenkins (local)
 
-A local Jenkins LTS with a Docker-in-Docker sidecar runs `Jenkinsfile`. Build #2 succeeded: seven stages executed
-(checkout, dependency install, tests, image build, temporary container deployment, health verification, and
-cleanup), the 4 unit tests passed, `/health` returned HTTP 200, and the temporary local container was removed.
-The pipeline never deploys to AWS. See `jenkins/README.md`.
+A local Jenkins LTS with a Docker-in-Docker sidecar runs `Jenkinsfile`. The original local stages still run first:
+checkout, dependency install, the 4 unit tests, image build, a temporary container, health verification, and
+cleanup. After those pass, the pipeline checks that it is using `sre-jenkins-deploy-role`, publishes a
+`linux/amd64` image to the private ECR repository `sre-platform`, and checks the digest, architecture, and
+source revision label. The image tag is the full commit SHA. An existing tag is reused only when that digest
+matches a recorded or operator-supplied value. The pipeline does not pull or run anything on EC2.
+
+Build #2 on `sre-platform-ci` succeeded for the local stages, before publishing existed. Build #4 on the
+temporary job `sre-platform-ci-ecr-test` succeeded for the publish path: 4 tests passed, the temporary container
+was healthy, and ECR stored tag `110adbe1f0cdd3e355486b3dd415f5dea97a06c5` at digest
+`sha256:5f6ab0e1caf0bc49ff1b9cb6cc14885a10b60847b8e4096405b00d7eee70755d` (`linux/amd64`, revision label
+matched). That tag is a snapshot commit kept inside Jenkins, not a commit in this repository. Credentials and
+the temporary container were removed afterwards. See `jenkins/README.md`.
 
 ### Terraform (isolated demonstration)
 
@@ -246,7 +255,7 @@ It currently does not provide:
 - high availability or multiple EC2 instances
 - infrastructure as code for the EC2 deployment (Terraform was demonstrated only on one isolated security group, since destroyed)
 - configuration management of the EC2 instance (the Ansible demonstration targets a local container)
-- automated deployment to EC2 (the Jenkins pipeline is local and does not deploy to AWS)
+- automated deployment to EC2 (Jenkins publishes an image to ECR and does not pull or run it on EC2)
 - centralized log aggregation
 - verified external alerting (a Datadog synthetic check exists, but failure alerting and recovery have not been verified)
 - application authentication
