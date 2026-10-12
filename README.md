@@ -25,7 +25,7 @@ Jenkins -> Docker -> ECR -> SSM SREPlatformDeploy -> EC2 -> Nginx :80
                                                     FastAPI /health
 ```
 
-`sre-service` still listens on `127.0.0.1:8000`. Nginx does not proxy to it. That process remains available for manual rollback.
+While the instance was running, `sre-service` listened on `127.0.0.1:8000`. Nginx did not proxy to it. That process remained available for manual rollback.
 
 Monitoring and alerting:
 
@@ -45,7 +45,7 @@ Amazon SNS
 Email notification
 ```
 
-External monitoring (passing checks and failed HTTP checks; a Datadog ALERT status was not recorded; see [Datadog External Monitoring](#datadog-external-monitoring)):
+External monitoring (healthy OK, then OK → ALERT → OK; see [Datadog External Monitoring](#datadog-external-monitoring)):
 
 ```text
 Datadog Synthetic HTTP test (AWS Ohio location, every 15 minutes)
@@ -54,28 +54,28 @@ Datadog Synthetic HTTP test (AWS Ohio location, every 15 minutes)
 Public endpoint on the EC2 instance: GET /health
 ```
 
-The service runs on an Ubuntu EC2 instance. The container's Uvicorn listens on localhost inside that container. Nginx provides the public HTTP entry point on port 80 and proxies to `127.0.0.1:18001`. `deploy/sre-monitor.service` checks that Nginx path and publishes `Availability`, `LatencyMs`, and `Failures`.
+While the instance was running, the container's Uvicorn listened on localhost inside that container. Nginx provided the public HTTP entry point on port 80 and proxied to `127.0.0.1:18001`. `deploy/sre-monitor.service` checked that Nginx path and published `Availability`, `LatencyMs`, and `Failures`. After the demonstration the EC2 instance is stopped and the Datadog synthetic test is paused.
 
 ## What Runs Where
 
 **Deployed on AWS (the EC2 instance and AWS services)**
 
 - FastAPI in a Docker container, published only on `127.0.0.1:18001`, behind Nginx on port 80
-- systemd unit `sre-service`, still running on `127.0.0.1:8000` for manual rollback
-- `deploy/sre-monitor.service`, installed, active, and enabled
+- systemd unit `sre-service` on `127.0.0.1:8000`, kept for manual rollback and not used as the Nginx upstream
+- `deploy/sre-monitor.service`, installed and enabled; it was active during the demonstration
 - CloudWatch custom metrics, dashboard, and alarm; SNS email notification; EC2 IAM role
 - `/usr/local/sbin/sre-platform-deploy`, installed from `deploy/ec2_deploy.py`
 - SSM document `SREPlatformDeploy` version 1
 
-This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform or Ansible. Jenkins Build #5 of the temporary job `sre-platform-ci-ecr-test` published the image and sent the verified digest through `SREPlatformDeploy`. Nginx now proxies to `127.0.0.1:18001`. The previous container was stopped and kept. See `deploy/ec2-deployment.md`.
+This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform or Ansible. Jenkins Build #5 of the temporary job `sre-platform-ci-ecr-test` published the image and sent the verified digest through `SREPlatformDeploy`. Nginx proxied to `127.0.0.1:18001`. The previous container was stopped and kept. The instance is now stopped. See `deploy/ec2-deployment.md`.
 
 **AWS, separate from the EC2 application**
 
-- A private ECR repository named `sre-platform` in `us-east-2`. Jenkins publishes `linux/amd64` images to it. The digest running on the instance is `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
+- A private ECR repository named `sre-platform` in `us-east-2`. Jenkins publishes `linux/amd64` images to it. The digest verified on the instance is `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
 
 **External service**
 
-- A Datadog Synthetic HTTP test that probes the EC2 endpoint from outside AWS. It is configured in the Datadog UI.
+- A Datadog Synthetic HTTP test that probed the EC2 endpoint from outside AWS. It is configured in the Datadog UI and is paused after the demonstration.
 
 **Local demonstrations (not deployed to AWS)**
 
@@ -149,11 +149,11 @@ Nginx provides the public HTTP entry point:
 Client -> Nginx :80 -> container 127.0.0.1:18001 -> Uvicorn :8000 -> FastAPI
 ```
 
-Requests received by Nginx are forwarded over localhost to the container Jenkins Build #5 placed in service. `deploy/nginx.conf` in git still points at port 8000. The host script edits the live site file and does not copy that git file onto the instance.
+While the instance was running, requests received by Nginx were forwarded over localhost to the container Jenkins Build #5 placed in service. The instance is now stopped. `deploy/nginx.conf` in git still points at port 8000. The host script edits the live site file and does not copy that git file onto the instance.
 
 ## Synthetic Monitoring
 
-`monitor/monitor.py` continuously checks the health endpoint. On the instance, `deploy/sre-monitor.service` is installed, active, and enabled. It runs as the Ubuntu user and checks `http://127.0.0.1/health`, which is Nginx. CloudWatch therefore follows the container Nginx is serving. The unit does not set access keys. The monitor's own default URL is still `127.0.0.1:8000`, the systemd process. The unit overrides that default.
+`monitor/monitor.py` continuously checks the health endpoint. On the instance, `deploy/sre-monitor.service` was installed, active, and enabled during the demonstration. It runs as the Ubuntu user and checks `http://127.0.0.1/health`, which is Nginx. CloudWatch therefore followed the container Nginx was serving. The unit does not set access keys. The monitor's own default URL is still `127.0.0.1:8000`, the systemd process. The unit overrides that default. The instance is now stopped.
 
 The monitor:
 
@@ -283,7 +283,7 @@ Detailed failure-test notes are available in `incidents/failure-tests.md`.
 
 ## Docker
 
-*Local image build. Jenkins publishes a separate image and Build #5 pulled that digest onto EC2. The systemd service is still running.*
+*Local image build. Jenkins publishes a separate image and Build #5 pulled that digest onto EC2. The systemd service was still running during that deployment. The instance is now stopped.*
 
 `Dockerfile` builds an image of the FastAPI service: `python:3.12-slim`, a non-root user, only `service/` and
 `requirements.txt` copied in, Uvicorn on `0.0.0.0:8000`, and a Python `urllib` `HEALTHCHECK` against `/health`.
@@ -373,13 +373,15 @@ from one AWS Ohio location. Its assertions are status code `200`, response time 
 `Content-Type: application/json`.
 
 **Verified:** two executions (one scheduled, one manual) passed, with HTTP 200 and response times of about
-7 to 10 ms. The Datadog monitor status for those runs was OK. A controlled demonstration later produced failed
-HTTP checks against the public endpoint. Nginx serves that endpoint from the container on `127.0.0.1:18001`.
-Stopping `sre-service` does not fail it.
+7 to 10 ms. The Datadog monitor status for those runs was OK. Controlled manual failure injection then
+produced failed HTTP checks. After multiple failed checks the monitor went from OK to ALERT. Manual
+application recovery followed, and the monitor returned from ALERT to OK. While the instance was running,
+Nginx served that endpoint from the container on `127.0.0.1:18001`. Stopping `sre-service` does not fail it.
+The exact injection command is not recorded.
 
-**Not recorded:** a Datadog monitor status of ALERT, Datadog alert notifications, or a Datadog recovery
-notification. Restoring the public path by hand is manual recovery. It is separate from the deploy script's
-automatic rollback, which has not been exercised on the instance.
+**Not recorded:** delivery of a Datadog notification message. Manual recovery of the application is separate
+from the deploy script's automatic rollback, which has not been exercised on the instance. The synthetic test
+is paused, and the EC2 instance is stopped.
 See `docs/datadog-monitoring.md` for the comparison with the Python monitor and CloudWatch, and for
 the full list of limitations.
 
@@ -489,6 +491,21 @@ site-reliability-platform/
 └── README.md
 ```
 
+## Final demonstration status
+
+| Result | Status |
+| --- | --- |
+| Jenkins Build #5 | SUCCESS |
+| Jenkins → ECR → SSM → EC2 | VERIFIED |
+| Docker and Nginx deployment | VERIFIED. Nginx proxied to `127.0.0.1:18001` |
+| CloudWatch metrics and alarm | VERIFIED |
+| Datadog failure detection and recovery | VERIFIED. OK, then OK → ALERT, then ALERT → OK |
+| Live automated deployment rollback | Implemented and unit-tested. Not verified on the instance |
+| EC2 after the demonstration | STOPPED |
+| Datadog synthetic test after the demonstration | PAUSED |
+
+Automated CI/CD deployment, automated failure detection, and manual runtime recovery are separate. The deploy script can roll back a failed cutover. That live path was not run.
+
 ## Project Scope
 
 This is intentionally a small learning and portfolio project rather than a production-ready platform.
@@ -511,16 +528,17 @@ It demonstrates:
 - a local Jenkins pipeline that tests the service, checks a temporary container, publishes a `linux/amd64` image to a private ECR repository, and deploys the verified digest through SSM (Build #5)
 - infrastructure as code with Terraform, limited to one isolated demo security group
 - idempotent configuration management with Ansible on a local container
-- an external Datadog synthetic check (passing checks and failed HTTP checks; ALERT status not recorded)
+- an external Datadog synthetic check (OK, then OK → ALERT after failed HTTP checks, then ALERT → OK after manual recovery)
 
 It does **not** currently:
 
 - show a live run of the deploy script's automatic rollback (Build #5 was a successful cutover; rollback is implemented and unit-tested)
 - manage the EC2 instance, its security groups, Nginx, systemd, CloudWatch, or SNS with Terraform
 - configure the EC2 instance with Ansible
-- provide a recorded Datadog monitor status of ALERT, Datadog alert notifications, or a Datadog recovery notification
+- record delivery of a Datadog notification message
 - provide TLS, high availability, or centralized log aggregation
+- keep the EC2 instance running or the Datadog test unpaused after the demonstration
 
-The historical failure demonstration stopped and started `sre-service` by hand while Nginx still proxied to it. The monitor detected that outage and the recovery, CloudWatch entered alarm, and SNS delivered email. Datadog has since recorded failed HTTP checks on the public Docker path. It has not been recorded in ALERT. Neither demonstration was the deploy script's automatic rollback.
+The historical failure demonstration stopped and started `sre-service` by hand while Nginx still proxied to it. The on-host monitor detected that outage and the recovery, CloudWatch entered alarm, and SNS delivered email. A later controlled manual failure injection on the Docker path produced Datadog's OK → ALERT → OK transition. Neither demonstration was the deploy script's automatic rollback.
 
-Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, a live exercise of automatic deploy rollback, tighter least-privilege IAM, TLS, centralized logging, verifying Datadog alerting and recovery, and additional failure scenarios.
+Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, a live exercise of automatic deploy rollback, tighter least-privilege IAM, TLS, centralized logging, a recorded Datadog notification delivery, and additional failure scenarios.

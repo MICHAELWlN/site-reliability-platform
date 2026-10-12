@@ -51,7 +51,7 @@ These tests demonstrate three different behaviors: automatic recovery from an un
 
 ## Synthetic Monitor
 
-`monitor/monitor.py` independently checks the health endpoint. `deploy/sre-monitor.service` is installed, active, and enabled. It checks `http://127.0.0.1/health` through Nginx and publishes CloudWatch metrics with the instance role. It does not use access keys. The script's default URL is still the systemd process on port 8000. The unit overrides that default, so the metrics follow the container Nginx is serving.
+`monitor/monitor.py` independently checks the health endpoint. `deploy/sre-monitor.service` was installed, active, and enabled during the demonstration. It checks `http://127.0.0.1/health` through Nginx and publishes CloudWatch metrics with the instance role. It does not use access keys. The script's default URL is still the systemd process on port 8000. The unit overrides that default, so the metrics followed the container Nginx was serving. The instance is now stopped.
 
 The monitor:
 
@@ -152,14 +152,14 @@ This recording is live failure detection and manual recovery of `sre-service`. I
 The sections above describe the hand-built EC2 host and the recorded monitor outage. Ansible stays local.
 Terraform's EC2 demo was one isolated security group, since destroyed. Jenkins publishes images to the private ECR
 repository `sre-platform` and Build #5 deployed one verified digest through `SREPlatformDeploy` version 1.
-Nginx serves that container on `127.0.0.1:18001`. The systemd service is still running for manual rollback.
+While the instance was running, Nginx served that container on `127.0.0.1:18001`. The systemd service remained available for manual rollback. The instance is now stopped.
 See `deploy/ec2-deployment.md`.
 
 ### Docker (local)
 
 `Dockerfile` builds a container image of the FastAPI service. Verified locally: the image built, the container's
 health status became `healthy`, `GET /health` returned HTTP 200, and the container ran as a non-root user.
-The systemd service is still running on the instance. Nginx now serves the container deployed by Jenkins Build #5.
+During Build #5 the systemd service was still running. Nginx served the container that build deployed. The instance is now stopped.
 
 ### Jenkins (local)
 
@@ -205,10 +205,13 @@ See `ansible/README.md`.
 ### Datadog (external)
 
 A Datadog Synthetic HTTP test checks `/health` on the public EC2 endpoint every 15 minutes from one AWS Ohio
-location. Nginx serves that endpoint from the Docker container on `127.0.0.1:18001`. Two executions passed, and
-a controlled demonstration produced failed HTTP checks. A Datadog monitor status of ALERT, alert notifications,
-and a Datadog recovery notification have not been recorded. Stopping `sre-service` does not fail this path.
-Manual recovery of the public endpoint is separate from automatic deployment rollback. See `docs/datadog-monitoring.md`.
+location. While the instance was running, Nginx served that endpoint from the Docker container on
+`127.0.0.1:18001`. Healthy checks were OK. Controlled manual failure injection produced failed HTTP checks.
+After multiple failed checks the monitor went from OK to ALERT. Manual application recovery followed, and the
+monitor returned from ALERT to OK. Delivery of a Datadog notification message was not recorded. Stopping
+`sre-service` does not fail this path. The exact injection command is not recorded. Manual recovery is
+separate from automatic deployment rollback, which has not been exercised on the instance. The instance is
+now stopped, and the synthetic test is paused. See `docs/datadog-monitoring.md`.
 
 ## Design Decisions
 
@@ -276,7 +279,7 @@ It currently does not provide:
 - configuration management of the EC2 instance (the Ansible demonstration targets a local container)
 - a live exercise of the deploy script's automatic rollback (Build #5 completed a successful cutover)
 - centralized log aggregation
-- a recorded Datadog monitor status of ALERT (failed HTTP checks were observed; alert notifications and Datadog recovery were not)
+- a recorded Datadog notification delivery (the monitor status OK → ALERT → OK was verified)
 - application authentication
 - dependency-level health checks
 
@@ -292,7 +295,7 @@ Logical next steps include:
 - TLS
 - a live exercise of automatic deploy rollback
 - centralized logging
-- verifying Datadog failure alerting and recovery
+- a recorded Datadog notification delivery
 - additional failure scenarios
 - dependency-aware health checks
 - automated integration testing

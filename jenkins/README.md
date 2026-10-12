@@ -379,7 +379,7 @@ Jenkins -> Docker -> ECR -> SSM SREPlatformDeploy -> EC2 -> Nginx
 - Verify stage recorded `platform=linux/amd64` and `revision_label=1654be9a8e0e08ce4c480b01f18b41b62da88ed4`.
 - Deploy to EC2 sent only `SREPlatformDeploy` version 1. SSM command `a4a8d4f3-36a7-418b-80c1-b9c8382a554e` finished Success with response code 0 and empty stderr.
 - The host script pulled that digest, started `sre-platform-6951edc16cb8` on `127.0.0.1:18001`, and recorded `candidate_health` result ok.
-- Nginx was tested, reloaded, and `public_health` on port 18001 was ok. Nginx now proxies port 80 to `127.0.0.1:18001`.
+- Nginx was tested, reloaded, and `public_health` on port 18001 was ok. Nginx proxied port 80 to `127.0.0.1:18001`. The EC2 instance was stopped after the later demonstration.
 - `sre-platform-candidate` was stopped and kept. It had been serving `sha256:5f6ab0e1caf0bc49ff1b9cb6cc14885a10b60847b8e4096405b00d7eee70755d` on port 18000. The invocation logged `retire_previous` with action `stop`, not a removal.
 - Post actions removed the temporary Jenkins container and the local image references, then cleared the AWS session. ECR still has the image. The two earlier tags were still present.
 

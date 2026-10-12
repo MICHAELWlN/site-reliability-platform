@@ -10,23 +10,25 @@ Three results are separate:
 
 - **Successful automated deployment.** Build #5 published and deployed `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. SSM command `a4a8d4f3-36a7-418b-80c1-b9c8382a554e` finished Success with exit 0. Nginx switched to `127.0.0.1:18001`.
 - **Automatic deployment rollback.** `deploy/ec2_deploy.py` can restore the previous Nginx upstream and container when a cutover fails. `deploy/test_ec2_deploy.py` covers that against a fake host. Build #5 was a successful cutover, so this path has not been exercised on the instance.
-- **Live failure detection and manual recovery.** A historical outage stopped `sre-service` by hand and started it again by hand while Nginx still proxied to that process. The monitor, CloudWatch, and SNS observed that outage and the recovery. Current public traffic goes through Nginx to the container on `127.0.0.1:18001`. During a controlled demonstration, Datadog recorded failed HTTP checks against that public endpoint. A Datadog monitor status of ALERT was not recorded. Neither demonstration used the deploy script's automatic rollback.
+- **Automated failure detection and manual runtime recovery.** A historical outage stopped `sre-service` by hand and started it again by hand while Nginx still proxied to that process. The on-host monitor, CloudWatch, and SNS observed that outage and the recovery. While the instance was running, public traffic went through Nginx to the container on `127.0.0.1:18001`. Controlled manual failure injection on that path produced failed Datadog HTTP checks. After multiple failed checks the Datadog monitor went from OK to ALERT. Manual application recovery followed, and the monitor returned from ALERT to OK. The exact injection command is not recorded. Neither demonstration used the deploy script's automatic rollback. The instance is now stopped, and the Datadog synthetic test is paused.
 
 What is installed:
 
 - `/usr/local/sbin/sre-platform-deploy` is installed from `deploy/ec2_deploy.py`. Build #5 invoked it through the document.
 - `SREPlatformDeploy` version 1 is registered and Active. Its command is the installed script, and its only parameter is `imageDigest`.
-- `deploy/sre-monitor.service` is installed, active, and enabled. It checks `http://127.0.0.1/health` and publishes `Availability`, `LatencyMs`, and `Failures` to CloudWatch namespace `SREPlatform`.
+- `deploy/sre-monitor.service` was installed, active, and enabled during the demonstration. It checks `http://127.0.0.1/health` and publishes `Availability`, `LatencyMs`, and `Failures` to CloudWatch namespace `SREPlatform`. The instance is now stopped.
 
 An earlier invocation of the same document, outside Jenkins, targeted the digest that was already serving traffic. That run was a no-op apart from setting the container restart policy to `unless-stopped`. `sre-service` stayed active. Build #5 is the cutover that followed.
 
-## What is running after Build #5
+## What Build #5 left running
+
+These facts were verified while the instance was running. The instance is now stopped.
 
 - Instance `i-0de56d01b124c0e69` in `us-east-2`.
-- systemd unit `sre-service` still listens on `127.0.0.1:8000`. Nginx does not proxy to it.
-- Container `sre-platform-6951edc16cb8` serves digest `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e` on `127.0.0.1:18001`. Its restart policy is `unless-stopped`. It passed the container health check, and `/health` through Nginx returned HTTP 200.
+- systemd unit `sre-service` listened on `127.0.0.1:8000`. Nginx did not proxy to it.
+- Container `sre-platform-6951edc16cb8` served digest `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e` on `127.0.0.1:18001`. Its restart policy is `unless-stopped`. It passed the container health check, and `/health` through Nginx returned HTTP 200.
 - Container `sre-platform-candidate` is stopped and retained. It had been serving `sha256:5f6ab0e1caf0bc49ff1b9cb6cc14885a10b60847b8e4096405b00d7eee70755d` on `127.0.0.1:18000`. The invocation logged `retire_previous` with action `stop`.
-- Nginx proxies port 80 to `127.0.0.1:18001`. The cutover wrote a backup of the previous site file under `/var/backups`.
+- Nginx proxied port 80 to `127.0.0.1:18001`. The cutover wrote a backup of the previous site file under `/var/backups`.
 - `deploy/nginx.conf` in git is still the original file, with `proxy_pass` pointed at port 8000. The script does not copy that file onto the instance. It edits the live file `/etc/nginx/sites-available/sre-platform`.
 - The source snapshot for Build #5 is `1654be9a8e0e08ce4c480b01f18b41b62da88ed4`. It lives in the Jenkins test repository and is not a commit in this project.
 
@@ -82,7 +84,7 @@ The previous container stays running until the health check through Nginx passes
 | Rollback cannot restore that health | Exit 12. The previous digest is still the one recorded on the previous container when that container remains. |
 | Restart policy after a good switch | Nginx stays on the new container. A second run of the same digest only retries the restart policy. |
 
-Manual rollback to the systemd application is still the earlier procedure: point `proxy_pass` back at `127.0.0.1:8000`, run `nginx -t`, and reload Nginx. `sre-service` is still running, and this script does not stop it.
+Manual rollback to the systemd application is still the earlier procedure: point `proxy_pass` back at `127.0.0.1:8000`, run `nginx -t`, and reload Nginx. The script does not stop `sre-service`. The instance is now stopped.
 
 Manual rollback to the previous container, after a successful deploy has stopped it: `docker start` that container, point `proxy_pass` at its localhost port, test, and reload.
 
@@ -116,7 +118,7 @@ python3 jenkins/test_ssm_deploy_tool.py
 - The instance role's ability to pull from ECR was already verified. No new instance-role permission was added. The policy document on the Jenkins role was not readable from the lab identity, so this file does not claim to have reviewed it.
 - `sre-service` still occupies port 8000 and memory. The script will not stop it.
 - A second container needs the free memory checked above. The last manual check saw about 406 MiB available and about 2.8 GB of free disk.
-- The serving container uses restart policy `unless-stopped`. `sre-service` is still running on port 8000.
+- While the instance was running, the serving container used restart policy `unless-stopped`, and `sre-service` was still running on port 8000. The instance is now stopped.
 - Both containers answer `/health` with the same body. The script treats `nginx -T` plus HTTP 200 as the switch check. It does not prove which build is behind Nginx by reading a version header.
 - `deploy/sre-monitor.service` targets `http://127.0.0.1/health`, so CloudWatch follows Nginx. `monitor/monitor.py` still defaults to `127.0.0.1:8000` when that flag is omitted.
 - A successful deploy keeps the container it just replaced and removes older stopped platform containers. It removes unused `sre-platform` images only. It does not prune unrelated Docker resources.
