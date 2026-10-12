@@ -2,7 +2,7 @@
 
 Demo
 
-Watch the Full SRE Platform Demonstration on LinkedIn
+[Watch the Full SRE Platform Demonstration on LinkedIn](https://lnkd.in/p/gbGvvdAN)
 
 A walkthrough of my AWS Site Reliability Platform demonstrating:
 
