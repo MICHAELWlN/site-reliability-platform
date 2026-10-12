@@ -13,17 +13,19 @@ The application itself is intentionally minimal. The focus is the reliability la
 ## Architecture
 
 ```text
-Internet
-   |
-   v
-Nginx :80
-   |
-   v
-Uvicorn 127.0.0.1:8000
-   |
-   v
-FastAPI /health
+Jenkins -> Docker -> ECR -> SSM SREPlatformDeploy -> EC2 -> Nginx :80
+                                                              |
+                                                              v
+                                            container 127.0.0.1:18001
+                                                              |
+                                                              v
+                                            Uvicorn :8000 inside the container
+                                                              |
+                                                              v
+                                                    FastAPI /health
 ```
+
+`sre-service` still listens on `127.0.0.1:8000`. Nginx does not proxy to it. That process remains available for manual rollback.
 
 Monitoring and alerting:
 
@@ -43,7 +45,7 @@ Amazon SNS
 Email notification
 ```
 
-External monitoring (verified for the success path only; see [Datadog External Monitoring](#datadog-external-monitoring)):
+External monitoring (passing checks and failed HTTP checks; a Datadog ALERT status was not recorded; see [Datadog External Monitoring](#datadog-external-monitoring)):
 
 ```text
 Datadog Synthetic HTTP test (AWS Ohio location, every 15 minutes)
@@ -52,21 +54,24 @@ Datadog Synthetic HTTP test (AWS Ohio location, every 15 minutes)
 Public endpoint on the EC2 instance: GET /health
 ```
 
-The service runs on an Ubuntu EC2 instance. Uvicorn is bound to localhost, while Nginx provides the public HTTP entry point on port 80.
+The service runs on an Ubuntu EC2 instance. The container's Uvicorn listens on localhost inside that container. Nginx provides the public HTTP entry point on port 80 and proxies to `127.0.0.1:18001`. `deploy/sre-monitor.service` checks that Nginx path and publishes `Availability`, `LatencyMs`, and `Failures`.
 
 ## What Runs Where
 
 **Deployed on AWS (the EC2 instance and AWS services)**
 
-- FastAPI service under Uvicorn and systemd, behind Nginx on port 80
-- Python synthetic monitor
+- FastAPI in a Docker container, published only on `127.0.0.1:18001`, behind Nginx on port 80
+- systemd unit `sre-service`, still running on `127.0.0.1:8000` for manual rollback
+- `deploy/sre-monitor.service`, installed, active, and enabled
 - CloudWatch custom metrics, dashboard, and alarm; SNS email notification; EC2 IAM role
+- `/usr/local/sbin/sre-platform-deploy`, installed from `deploy/ec2_deploy.py`
+- SSM document `SREPlatformDeploy` version 1
 
-This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform, Ansible, or Jenkins. Jenkins does not deploy to this instance.
+This deployment was built and configured by hand. It is **not** provisioned or configured by Terraform or Ansible. Jenkins Build #5 of the temporary job `sre-platform-ci-ecr-test` published the image and sent the verified digest through `SREPlatformDeploy`. Nginx now proxies to `127.0.0.1:18001`. The previous container was stopped and kept. See `deploy/ec2-deployment.md`.
 
 **AWS, separate from the EC2 application**
 
-- A private ECR repository named `sre-platform` in `us-east-2`. Jenkins publishes `linux/amd64` images to it. Nothing pulls or runs those images on EC2.
+- A private ECR repository named `sre-platform` in `us-east-2`. Jenkins publishes `linux/amd64` images to it. The digest running on the instance is `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
 
 **External service**
 
@@ -74,8 +79,8 @@ This deployment was built and configured by hand. It is **not** provisioned or c
 
 **Local demonstrations (not deployed to AWS)**
 
-- **Docker:** the FastAPI service runs in a container on a local machine.
-- **Jenkins:** a local pipeline tests the service, checks a temporary local container, then publishes a `linux/amd64` image to the private ECR repository. It does not deploy to EC2.
+- **Docker:** the FastAPI service can also be built and run on a local machine. The EC2 container is a separate `linux/amd64` image published by Jenkins.
+- **Jenkins:** the controller runs locally. Build #5 tested the service, checked a temporary container, published the image, and deployed that digest to EC2.
 - **Ansible:** a playbook configures Nginx in a throwaway local Ubuntu container, not on EC2.
 - **Terraform:** a small demo created, verified, and destroyed one isolated security group. It does not manage the EC2 instance.
 
@@ -141,14 +146,14 @@ Uvicorn is not directly exposed to the internet.
 Nginx provides the public HTTP entry point:
 
 ```text
-Client -> Nginx :80 -> Uvicorn 127.0.0.1:8000 -> FastAPI
+Client -> Nginx :80 -> container 127.0.0.1:18001 -> Uvicorn :8000 -> FastAPI
 ```
 
-Requests received by Nginx are forwarded to the application server over localhost.
+Requests received by Nginx are forwarded over localhost to the container Jenkins Build #5 placed in service. `deploy/nginx.conf` in git still points at port 8000. The host script edits the live site file and does not copy that git file onto the instance.
 
 ## Synthetic Monitoring
 
-`monitor/monitor.py` continuously checks the health endpoint.
+`monitor/monitor.py` continuously checks the health endpoint. On the instance, `deploy/sre-monitor.service` is installed, active, and enabled. It runs as the Ubuntu user and checks `http://127.0.0.1/health`, which is Nginx. CloudWatch therefore follows the container Nginx is serving. The unit does not set access keys. The monitor's own default URL is still `127.0.0.1:8000`, the systemd process. The unit overrides that default.
 
 The monitor:
 
@@ -163,11 +168,11 @@ The monitor:
 
 ## CloudWatch Observability
 
-When CloudWatch publishing is enabled, the monitor publishes three custom metrics to the `SREPlatform` namespace:
+`deploy/sre-monitor.service` enables CloudWatch publishing. The monitor publishes three custom metrics to the `SREPlatform` namespace from the Nginx health check:
 
-- `Availability`
-- `LatencyMs`
-- `Failures`
+- `Availability` (`1` when the check is healthy, otherwise `0`)
+- `LatencyMs` (check duration in milliseconds)
+- `Failures` (`1` when the check fails, otherwise `0`)
 
 The EC2 instance uses an IAM role for AWS access rather than hard-coded AWS credentials.
 
@@ -213,6 +218,8 @@ This test demonstrates automatic process recovery. It is separate from the contr
 
 Boot persistence was also verified separately by restarting the EC2 instance and confirming that the enabled systemd service started during normal boot and `/health` returned HTTP 200.
 ## Controlled Failure Test
+
+This outage is historical. Nginx proxied to `sre-service` at the time. Current public traffic goes to the Docker container on `127.0.0.1:18001`. The results below are unchanged.
 
 The deployed system was tested by deliberately creating an application outage.
 
@@ -276,7 +283,7 @@ Detailed failure-test notes are available in `incidents/failure-tests.md`.
 
 ## Docker
 
-*Local demonstration. Not used for the EC2 deployment, which runs under systemd.*
+*Local image build. Jenkins publishes a separate image and Build #5 pulled that digest onto EC2. The systemd service is still running.*
 
 `Dockerfile` builds an image of the FastAPI service: `python:3.12-slim`, a non-root user, only `service/` and
 `requirements.txt` copied in, Uvicorn on `0.0.0.0:8000`, and a Python `urllib` `HEALTHCHECK` against `/health`.
@@ -288,17 +295,19 @@ push anywhere. Jenkins publishes a separate `linux/amd64` image to ECR.
 
 ## Jenkins CI
 
-*Local Jenkins. It publishes images to a private ECR repository. It does not deploy to EC2.*
+*Local Jenkins. It publishes images to a private ECR repository and Build #5 deployed the verified digest through SSM. See `deploy/ec2-deployment.md`.*
 
 `Jenkinsfile` and `jenkins/` run Jenkins LTS in Docker, bound to `127.0.0.1:8080`, with a TLS Docker-in-Docker
 sidecar. The host Docker socket is not mounted, and the controller is not privileged. Short-lived AWS credentials
 are loaded into an in-memory directory for a build and removed when the build ends. No access keys are stored in Git.
 
-The pipeline keeps the original local stages, then publishes. In order: Checkout, Install Dependencies, Test
+The pipeline keeps the original local stages, then publishes and deploys. In order: Checkout, Install Dependencies, Test
 (the 4 unit tests), Build Image, Deploy Temporary Container, Verify Health (`GET /health` must return HTTP 200),
 Verify AWS Deployment Role (`assumed-role/sre-jenkins-deploy-role`), Publish Image to ECR (`linux/amd64`, tagged
-with the full commit SHA), Verify Image in ECR (digest, architecture, and revision label), then cleanup.
-Nothing is published unless the tests and the local health check pass. An existing immutable tag is reused only
+with the full commit SHA), Verify Image in ECR (digest, architecture, and revision label), Deploy to EC2
+(`SREPlatformDeploy` version 1, that verified digest only), then cleanup.
+Nothing is published unless the tests and the local health check pass. Nothing is sent to SSM unless the ECR
+verify stage recorded the digest. An existing immutable tag is reused only
 when its digest matches a publish record or an operator-supplied digest. Images are never overwritten or deleted
 by the pipeline.
 
@@ -313,6 +322,19 @@ tests passed, the temporary container became healthy and returned HTTP 200, and 
 Credentials were removed at the end, and the temporary container was removed. The earlier image
 `43eb11cef129969bf70df72267950fb0b57ceac5` was left unchanged. EC2 was not modified. Job `sre-platform-ci` was not
 used for this build and still has its original history.
+
+**Build #5: SUCCESS** on the same temporary job. It is the verified Jenkins → Docker → ECR → SSM → EC2 → Nginx
+run. The source snapshot is `1654be9a8e0e08ce4c480b01f18b41b62da88ed4`, kept in the Jenkins test repository and
+not a commit in this project. The 4 unit tests passed. ECR received
+`sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. SSM command
+`a4a8d4f3-36a7-418b-80c1-b9c8382a554e` finished Success with exit 0. Nginx switched to `127.0.0.1:18001`.
+Container `sre-platform-6951edc16cb8` passed its health check, and `/health` through Nginx returned HTTP 200.
+The previous container, `sre-platform-candidate`, was stopped and kept. Credentials were removed at the end.
+Job `sre-platform-ci` was not used.
+
+That build is a successful cutover. The deploy script's automatic rollback is implemented and covered by
+`deploy/test_ec2_deploy.py`. Build #5 did not exercise a failed cutover on the instance. The recorded
+CloudWatch outage and recovery used a manual stop and start of `sre-service`.
 
 Limits: publishing needs a short-lived role session loaded on the Mac before each build, so it is not unattended.
 The pipeline is not triggered by GitHub. It relies on a lab-only Jenkins setting (`ALLOW_LOCAL_CHECKOUT`) that
@@ -350,11 +372,15 @@ A Datadog Synthetic HTTP test sends `GET /health` to the EC2 application's publi
 from one AWS Ohio location. Its assertions are status code `200`, response time below 2000 ms, and
 `Content-Type: application/json`.
 
-**Verified:** two executions (one scheduled, one manual) both passed, with HTTP 200 and response times of about
-7 to 10 ms. The Datadog monitor status is OK.
+**Verified:** two executions (one scheduled, one manual) passed, with HTTP 200 and response times of about
+7 to 10 ms. The Datadog monitor status for those runs was OK. A controlled demonstration later produced failed
+HTTP checks against the public endpoint. Nginx serves that endpoint from the container on `127.0.0.1:18001`.
+Stopping `sre-service` does not fail it.
 
-**Not yet verified:** failure detection, alert notifications, and recovery. The test has only been observed
-passing. See `docs/datadog-monitoring.md` for the comparison with the Python monitor and CloudWatch, and for
+**Not recorded:** a Datadog monitor status of ALERT, Datadog alert notifications, or a Datadog recovery
+notification. Restoring the public path by hand is manual recovery. It is separate from the deploy script's
+automatic rollback, which has not been exercised on the instance.
+See `docs/datadog-monitoring.md` for the comparison with the Python monitor and CloudWatch, and for
 the full list of limitations.
 
 ## Running Locally
@@ -402,7 +428,7 @@ Run the unit tests:
 python -m unittest discover -s tests -v
 ```
 
-Build and run the container locally (bound to loopback only):
+Build and run the container locally (bound to loopback only). Port 18000 in this local example is not the EC2 upstream:
 
 ```bash
 docker build -t sre-platform:demo .
@@ -426,15 +452,21 @@ site-reliability-platform/
 │   └── test_monitor.py
 ├── deploy/                  # EC2 deployment files
 │   ├── nginx.conf
-│   └── sre-service.service
+│   ├── sre-service.service
+│   ├── sre-monitor.service  # installed unit; checks Nginx and publishes CloudWatch metrics
+│   ├── ec2_deploy.py        # installed on the instance as /usr/local/sbin/sre-platform-deploy
+│   ├── ec2-deployment.md
+│   ├── test_ec2_deploy.py
+│   └── ssm/SREPlatformDeploy.json  # source for registered document version 1
 ├── Dockerfile               # local container image of the service
 ├── .dockerignore
-├── Jenkinsfile              # test, local health check, then publish to ECR
-├── jenkins/                 # local Jenkins, credential handoff, ECR publish helper
+├── Jenkinsfile              # test, local health check, publish to ECR, deploy through SSM
+├── jenkins/                 # local Jenkins, credential handoff, ECR and SSM helpers
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── aws-creds-handoff.sh
 │   ├── ecr_publish_tool.py
+│   ├── ssm_deploy_tool.py
 │   └── README.md
 ├── terraform/deployment/    # private ECR repository (does not manage EC2)
 ├── terraform/demo/          # isolated security group demo
@@ -476,17 +508,19 @@ It demonstrates:
 - controlled failure injection
 - service restoration and recovery detection
 - local containerization with Docker
-- a local Jenkins pipeline that tests the service, checks a temporary container, and publishes a `linux/amd64` image to a private ECR repository
+- a local Jenkins pipeline that tests the service, checks a temporary container, publishes a `linux/amd64` image to a private ECR repository, and deploys the verified digest through SSM (Build #5)
 - infrastructure as code with Terraform, limited to one isolated demo security group
 - idempotent configuration management with Ansible on a local container
-- an external Datadog synthetic check (success path only)
+- an external Datadog synthetic check (passing checks and failed HTTP checks; ALERT status not recorded)
 
 It does **not** currently:
 
-- deploy the application to EC2 through Jenkins (images are published to ECR only)
+- show a live run of the deploy script's automatic rollback (Build #5 was a successful cutover; rollback is implemented and unit-tested)
 - manage the EC2 instance, its security groups, Nginx, systemd, CloudWatch, or SNS with Terraform
 - configure the EC2 instance with Ansible
-- provide verified Datadog failure detection, alert notifications, or recovery
+- provide a recorded Datadog monitor status of ALERT, Datadog alert notifications, or a Datadog recovery notification
 - provide TLS, high availability, or centralized log aggregation
 
-Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, automated deployment to EC2 from CI, tighter least-privilege IAM, TLS, centralized logging, verifying Datadog alerting and recovery, and additional failure scenarios.
+The historical failure demonstration stopped and started `sre-service` by hand while Nginx still proxied to it. The monitor detected that outage and the recovery, CloudWatch entered alarm, and SNS delivered email. Datadog has since recorded failed HTTP checks on the public Docker path. It has not been recorded in ALERT. Neither demonstration was the deploy script's automatic rollback.
+
+Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, a live exercise of automatic deploy rollback, tighter least-privilege IAM, TLS, centralized logging, verifying Datadog alerting and recovery, and additional failure scenarios.

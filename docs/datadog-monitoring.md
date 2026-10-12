@@ -3,8 +3,9 @@
 A Datadog Synthetic HTTP test checks the application's `/health` endpoint from outside AWS.
 It adds an external view of availability to the on-host Python monitor and CloudWatch.
 
-**Status in one line:** the success path is verified (the test ran, passed all assertions, and the monitor
-shows OK). **Failure detection, alert notifications, and recovery have not been verified.**
+**Status in one line:** passing checks are verified, and a controlled demonstration produced failed HTTP
+checks. A Datadog monitor status of ALERT, alert notifications, and a Datadog recovery notification have not
+been recorded.
 
 ## Where this configuration lives
 
@@ -15,6 +16,16 @@ configuration below is documented by hand and could drift from what is in Datado
 For security, this repository contains no Datadog API key, application key, account details, or the address
 of the EC2 endpoint. The results below were recorded by the project owner from the Datadog UI. No Datadog
 screenshots are committed.
+
+## Current public path
+
+Nginx on port 80 proxies to the Docker container at `127.0.0.1:18001`. That container is the digest deployed
+by Jenkins Build #5, `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Datadog's
+public `GET /health` follows that path.
+
+`sre-service` still listens on `127.0.0.1:8000`. Stopping it does not fail the public endpoint, because Nginx
+does not route there. The earlier procedure `sudo systemctl stop sre-service` applied when Nginx proxied to
+that systemd process. It is not the way to interrupt the current public path.
 
 ## Verified configuration
 
@@ -41,9 +52,14 @@ Observed across both executions:
 - Response time: approximately 7 to 10 ms
 - Response-time assertion (below 2000 ms): passed
 - `Content-Type: application/json` assertion: passed
-- Datadog monitor status: **OK**
+- Datadog monitor status during those passing runs: **OK**
 
-That is two successful runs, one location, and no failures. Nothing beyond this has been observed.
+A later controlled demonstration produced failed HTTP checks from this same synthetic test against the public
+endpoint. Those failed checks are recorded. This document does not record a Datadog monitor status of ALERT.
+
+Restoring the public endpoint in that demonstration was manual recovery of the running service. It was not
+the deploy script's automatic rollback. That rollback is implemented in `deploy/ec2_deploy.py` and covered by
+`deploy/test_ec2_deploy.py`. It has not been exercised on the instance.
 
 ## How the three monitoring layers differ
 
@@ -51,10 +67,10 @@ That is two successful runs, one location, and no failures. Nothing beyond this 
 | --- | --- | --- | --- |
 | Role | Generates the health signal | Stores metrics, evaluates the alarm, notifies | Independent outside-in check |
 | Where it runs | Process on the EC2 host (`monitor/monitor.py`) | AWS managed service | Datadog SaaS, from an AWS Ohio location |
-| What it requests | The local endpoint through Nginx (for example `http://127.0.0.1/health` in the AWS run example) | Does not probe anything itself; it uses the monitor's metrics | The public endpoint, across the internet |
+| What it requests | `http://127.0.0.1/health` through Nginx, which proxies to the container on `127.0.0.1:18001` | Does not probe anything itself; it uses the monitor's metrics | The public endpoint, across the internet, which Nginx serves from that container |
 | Check interval | Every 5 seconds by default, faster retries after a failure | Metrics arrive at the monitor's pace; alarm period is set in CloudWatch | Every 15 minutes |
 | Output | JSON log events, a local alert after 3 consecutive failures | Custom metrics `Availability`, `LatencyMs`, `Failures` in `SREPlatform`, a dashboard, a `Failures` alarm, SNS email | Pass/fail per run, response time, monitor status |
-| Verified | Yes, including a controlled outage | Yes, alarm and SNS email verified end to end in a controlled outage | Success path only |
+| Verified | Yes, including a historical systemd outage and the current Nginx check | Yes, alarm and SNS email verified end to end in a controlled outage; the installed unit now publishes from Nginx | Passing checks, and failed HTTP checks during a controlled demonstration. Monitor status ALERT was not recorded |
 
 ### Why more than one layer
 
@@ -72,12 +88,12 @@ appear in Datadog, before any alert settings are considered.
 
 ## Not yet verified
 
-- **Failure detection.** The test has not been observed failing, so it is not known that the monitor turns
-  to Alert when the endpoint is down.
+- **Monitor status ALERT.** Failed HTTP checks were observed. A Datadog monitor status of ALERT was not recorded.
 - **Alert notifications.** No Datadog notification (email or other channel) has been configured or tested.
-- **Recovery.** A transition from alerting back to OK has not been observed.
+- **Datadog recovery notification.** A transition of the Datadog monitor from an alerting state back to OK has
+  not been recorded. Manual restoration of the application is a separate action.
 - **Retry and alert-condition settings.** Behavior under failure (retries, how many failures trigger an alert)
-  has not been configured or tested.
+  has not been recorded.
 - **Multiple locations.** Only one location is used, so a regional problem at that location could look like an
   application failure.
 
@@ -86,7 +102,7 @@ appear in Datadog, before any alert settings are considered.
 - **Liveness only.** `/health` returns a fixed response and checks no dependencies, so a passing test means the
   web path answered, not that the system is fully functional.
 - **Slow interval.** 15 minutes gives coarse detection and little data (96 scheduled runs per day).
-- **Small sample.** Two runs show the setup works but say nothing about long-term availability or latency.
+- **Small sample.** The recorded runs show passing checks and failed HTTP checks. They do not describe long-term availability or latency.
 - **No TLS.** TLS is not configured in this deployment (see the main README), so certificate and expiry
   monitoring does not apply yet.
 - **UI-only configuration.** The test is not reproducible from this repository.
@@ -97,10 +113,8 @@ appear in Datadog, before any alert settings are considered.
 
 These are suggestions, not completed work:
 
-1. Create a controlled outage on the EC2 application with the same method used before
-   (`sudo systemctl stop sre-service`) and confirm the Datadog monitor changes to Alert. The 15-minute interval
-   means waiting for a scheduled run or triggering a manual run.
+1. `sudo systemctl stop sre-service` does not fail the public check. Nginx routes to the container on
+   `127.0.0.1:18001`, not to that systemd process.
 2. Configure a Datadog notification channel and confirm a message is actually delivered.
-3. Restore the service (`sudo systemctl start sre-service`) and confirm the monitor returns to OK and a recovery
-   notification is sent.
-4. Record the observed timings and keep screenshots as evidence, then update this document.
+3. Record whether the Datadog monitor status becomes ALERT when HTTP checks fail, and whether it returns to OK
+   after the public path is restored by hand. That manual restore is not the deploy script's automatic rollback.

@@ -2,7 +2,7 @@
 
 This configuration provisions **one private Amazon ECR repository** named
 `sre-platform`, plus a lifecycle policy for it. It is the first building block for
-a future automated deployment path.
+the repository Jenkins publishes to. Deployment to EC2 is not defined in this directory.
 
 It is separate from `terraform/demo/` and has its own state, so the two cannot affect
 each other.
@@ -11,11 +11,12 @@ each other.
 
 - **Repository exists.** It is the private repository Jenkins publishes to. This directory
   was not changed by the Jenkins integration work.
-- **Jenkins publishes images here and does not deploy.** After tests and a local health
-  check, the pipeline pushes a `linux/amd64` image tagged with the full commit SHA.
-  See `jenkins/README.md`. Nothing is pulled or run on EC2.
-- **EC2 is unchanged.** The existing instance still runs the application from the
-  hand-built systemd and Nginx setup. Nothing in this directory touches it.
+- **Jenkins publishes images here.** After tests and a local health check, the pipeline
+  pushes a `linux/amd64` image tagged with the full commit SHA. Build #5 then deployed
+  `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Nginx serves it
+  on `127.0.0.1:18001`. See `jenkins/README.md`. This directory was not part of that deploy.
+- **This directory does not manage EC2.** Nothing here changes the instance, its
+  security groups, Nginx, or systemd.
 
 ## What it creates
 
@@ -108,21 +109,22 @@ After the unit tests and the local health check pass, the pipeline in `../Jenkin
 
 Tags are immutable. A later build of the same commit reuses the image only after the digest matches.
 The role session is short-lived and is removed when the build ends. Build #4 of the temporary Jenkins
-job published one image this way. See `jenkins/README.md`.
+job published one image this way. Build #5 published
+`sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. See `jenkins/README.md`.
 
-### EC2 pulls images (not implemented)
+### EC2 pulls images (verified on Build #5)
 
 The EC2 instance role already includes `AmazonEC2ContainerRegistryReadOnly`, which
-permits pulling from ECR in the account without any stored keys. A later phase would
-have the instance:
+permits pulling from ECR in the account without any stored keys. During Build #5 the installed
+host script, not Terraform, did this on the instance:
 
 1. Log in with the instance role: `aws ecr get-login-password --region us-east-2`
-   piped to `docker login` for the registry host in `repository_url`.
-2. Pull the chosen tag.
-3. Run it.
+   piped to `docker login` for the registry host derived from the instance role.
+2. Pull the verified digest, not a mutable tag.
+3. Run it on `127.0.0.1:18001` and switch Nginx after the health checks passed.
 
-The instance would also need Docker installed, which has not been verified. This
-describes the intended mechanism. Nothing has been run against the instance.
+Docker is installed on the instance. That was shown by the successful pull and the running container.
+This Terraform directory still does not manage the instance, Nginx, or systemd.
 
 ## Limitations
 
@@ -131,5 +133,5 @@ describes the intended mechanism. Nothing has been run against the instance.
 - The lifecycle policy counts all images, so a rollback target older than the newest
   10 would be expired.
 - AWS-managed encryption was chosen over a customer-managed KMS key for simplicity.
-- Nothing here has been applied, so none of the AWS-side behaviour above has been
-  observed yet.
+- The repository exists and Jenkins publishes to it. Expiry of images beyond the newest
+  10 has not been observed. This directory does not deploy containers.

@@ -1,6 +1,7 @@
 // CI/CD pipeline: test, build the existing Dockerfile, deploy a temporary container,
-// verify /health, then publish a linux/amd64 image to Amazon ECR and verify it there.
-// Always cleans up. Nothing here deploys to EC2.
+// verify /health, publish a linux/amd64 image to Amazon ECR, verify it there, then
+// deploy that verified digest through the SREPlatformDeploy SSM document.
+// Always cleans up. The deploy stage sends only the restricted SREPlatformDeploy document.
 //
 // Docker commands run against the TLS Docker-in-Docker sidecar defined in
 // jenkins/docker-compose.yml (DOCKER_HOST is set on the Jenkins container).
@@ -16,9 +17,11 @@ pipeline {
     options {
         // Only the explicit Checkout stage below fetches source.
         skipDefaultCheckout(true)
-        // One build at a time, because the deployment port is fixed.
+        // One build of this job at a time. The local health-check port is fixed, and
+        // this job is the only pipeline that deploys to the EC2 instance. The host
+        // script also holds a flock, so a second deploy exits 11 and fails the build.
         disableConcurrentBuilds()
-        timeout(time: 15, unit: 'MINUTES')
+        timeout(time: 25, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
@@ -312,6 +315,73 @@ pipeline {
                 archiveArtifacts artifacts: 'ecr-image-record.txt', fingerprint: false
             }
         }
+
+        stage('Deploy to EC2') {
+            options {
+                timeout(time: 10, unit: 'MINUTES')
+            }
+            steps {
+                // The digest is the one Verify Image in ECR just recorded. The send
+                // request is built by jenkins/ssm_deploy_tool.py, which allows only
+                // SREPlatformDeploy version 1 and instance i-0de56d01b124c0e69.
+                sh '''#!/bin/bash
+                    set +x
+                    set -euo pipefail
+                    tool="python3 jenkins/ssm_deploy_tool.py"
+                    digest=$(sed -n 's/^digest=//p' ecr-image-record.txt)
+                    rm -f ssm-identity.err ssm-invoke.err ssm-send.json ssm-invocation.json
+
+                    set +e
+                    arn=$(aws sts get-caller-identity --region "$AWS_REGION" --query Arn --output text 2>ssm-identity.err)
+                    id_rc=$?
+                    set -e
+                    if [ "$id_rc" -ne 0 ]; then
+                        $tool explain-auth-failure < ssm-identity.err >&2
+                        exit 1
+                    fi
+                    $tool check-identity "$arn"
+                    $tool validate-digest "$digest"
+                    $tool write-send ssm-send.json "$digest"
+                    instance_id=$(python3 -c 'import json; print(json.load(open("ssm-send.json"))["InstanceIds"][0])')
+
+                    command_id=$(aws ssm send-command --cli-input-json file://ssm-send.json --query Command.CommandId --output text)
+                    $tool validate-command-id "$command_id"
+                    echo "SSM command: $command_id"
+
+                    start=$(date +%s)
+                    while true; do
+                        elapsed=$(( $(date +%s) - start ))
+                        set +e
+                        aws ssm get-command-invocation \
+                            --command-id "$command_id" \
+                            --instance-id "$instance_id" \
+                            --output json > ssm-invocation.json 2>ssm-invoke.err
+                        get_rc=$?
+                        set -e
+                        if [ "$get_rc" -ne 0 ]; then
+                            if $tool retryable-error < ssm-invoke.err && [ "$elapsed" -lt 30 ]; then
+                                sleep 2
+                                continue
+                            fi
+                            $tool explain-auth-failure < ssm-invoke.err >&2
+                            exit 1
+                        fi
+                        set +e
+                        $tool classify ssm-invocation.json --digest "$digest" --elapsed "$elapsed"
+                        class_rc=$?
+                        set -e
+                        if [ "$class_rc" -eq 0 ]; then
+                            break
+                        fi
+                        if [ "$class_rc" -eq 10 ]; then
+                            sleep 5
+                            continue
+                        fi
+                        exit 1
+                    done
+                '''
+            }
+        }
     }
 
     post {
@@ -338,6 +408,7 @@ pipeline {
                 fi
                 rm -rf "$DOCKER_CONFIG_DIR"
                 rm -f ecr-check.err ecr-inspect.err ecr-existing-digest.txt
+                rm -f ssm-identity.err ssm-invoke.err ssm-send.json ssm-invocation.json
                 jenkins-aws-clear || true
             '''
         }

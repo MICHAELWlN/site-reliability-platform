@@ -1,10 +1,11 @@
 # Local Jenkins CI/CD
 
 A minimal Jenkins LTS setup that runs `../Jenkinsfile` locally on Docker Desktop.
-The first six stages are local only. The last three publish a `linux/amd64` image to Amazon ECR using
+The first six stages are local only. The next three publish a `linux/amd64` image to Amazon ECR using
 [temporary credentials](#aws-credential-handoff-temporary-credentials) that you load first
-(see [Publishing to ECR](#publishing-to-ecr)). The pipeline does not touch the EC2 instance, systemd, or Nginx,
-and it does not deploy anything.
+(see [Publishing to ECR](#publishing-to-ecr)). **Deploy to EC2** then sends the verified digest to SSM.
+Build #5 of `sre-platform-ci-ecr-test` completed that path: Jenkins → Docker → ECR → SSM → EC2 → Nginx.
+See `deploy/ec2-deployment.md`.
 
 ## Pipeline
 
@@ -19,6 +20,7 @@ and it does not deploy anything.
 | Verify AWS Deployment Role | reads the full commit SHA; `aws sts get-caller-identity` must be `assumed-role/sre-jenkins-deploy-role`; derives the ECR registry host |
 | Publish Image to ECR | logs in with `--password-stdin`. If the SHA tag is absent, `docker buildx build --platform linux/amd64 --push`. If it already exists, reuse it only after the digest matches a publish record or `EXPECTED_IMAGE_DIGEST`. Never overwrites or deletes. |
 | Verify Image in ECR | `ecr:DescribeImages` by tag, compares the digest, reads the image config as JSON and requires `linux/amd64` (and a matching revision label on a fresh push), writes `ecr-image-record.txt` |
+| Deploy to EC2 | `jenkins/ssm_deploy_tool.py` sends that digest to registered `SREPlatformDeploy` version 1 on `i-0de56d01b124c0e69`, waits for Success and exit 0, and requires the script output to show Nginx `/health` was HTTP 200. Build #5 succeeded. |
 | post: always | prints container logs, removes the container and images, deletes the registry login and the temporary AWS credentials |
 
 Any failing stage fails the build, and the stages run in this order, so nothing is published unless the tests, the
@@ -356,6 +358,33 @@ matched to the older image.
 The `sre-lab` user can describe images but cannot download the image config, so the architecture and revision
 label are from the build's verify stage, tied to the digest confirmed by `DescribeImages`.
 
+### Build #5: SUCCESS
+
+Temporary job `sre-platform-ci-ecr-test`, snapshot `1654be9a8e0e08ce4c480b01f18b41b62da88ed4`. That snapshot is
+the Jenkins test repository's `ecr-test` branch. It is not a commit in this project. The production job
+`sre-platform-ci` was not used. `EXPECTED_IMAGE_DIGEST` was empty, so this SHA was published.
+
+Verified workflow:
+
+```text
+Jenkins -> Docker -> ECR -> SSM SREPlatformDeploy -> EC2 -> Nginx
+```
+
+- Checkout of that snapshot, then the 4 unit tests, `OK`.
+- Temporary container `sre-platform-ci-5` became `healthy`. `GET http://docker:18100/health` returned HTTP 200.
+- Identity was `assumed-role/sre-jenkins-deploy-role`.
+- Pushed `sre-platform:1654be9a8e0e08ce4c480b01f18b41b62da88ed4`.
+- Digest from Buildx, from `ecr:DescribeImages` during the build, from archived `ecr-image-record.txt`, and from a later read-only `DescribeImages`:
+  `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
+- Verify stage recorded `platform=linux/amd64` and `revision_label=1654be9a8e0e08ce4c480b01f18b41b62da88ed4`.
+- Deploy to EC2 sent only `SREPlatformDeploy` version 1. SSM command `a4a8d4f3-36a7-418b-80c1-b9c8382a554e` finished Success with response code 0 and empty stderr.
+- The host script pulled that digest, started `sre-platform-6951edc16cb8` on `127.0.0.1:18001`, and recorded `candidate_health` result ok.
+- Nginx was tested, reloaded, and `public_health` on port 18001 was ok. Nginx now proxies port 80 to `127.0.0.1:18001`.
+- `sre-platform-candidate` was stopped and kept. It had been serving `sha256:5f6ab0e1caf0bc49ff1b9cb6cc14885a10b60847b8e4096405b00d7eee70755d` on port 18000. The invocation logged `retire_previous` with action `stop`, not a removal.
+- Post actions removed the temporary Jenkins container and the local image references, then cleared the AWS session. ECR still has the image. The two earlier tags were still present.
+
+This was a successful cutover. The script's automatic rollback is implemented and tested with a fake host. Build #5 did not take a failure path on the instance, so live automatic rollback was not verified.
+
 ### Static checks for the reuse change
 
 Run from the repository root, no Jenkins, no AWS:
@@ -388,11 +417,11 @@ Use `down` without `-v` to keep the Jenkins configuration and dind cache between
 - The tests run on the Python version in the Jenkins image (3.13). The application image uses Python 3.12.
 - Dependencies in `requirements.txt` are not pinned, so builds are not fully reproducible.
 - Jenkins uses a single built-in node and a local file path as the repository source. It does not use GitHub webhooks.
-- The pipeline publishes to ECR but does not deploy. Nothing is pulled or run on EC2.
+- **Deploy to EC2** was executed by Build #5. An earlier same-digest invocation of the document, made outside Jenkins, only refreshed the restart policy of the container that was already serving traffic. See `deploy/ec2-deployment.md`.
 - Re-running a commit whose tag already exists reuses the image only after the digest and platform checks pass. It never overwrites or deletes. The first reuse of an image pushed before publish records existed needs `EXPECTED_IMAGE_DIGEST`.
 - The ECR stages need credentials loaded with `jenkins/aws-creds-handoff.sh` before every build. They are removed when the build ends, and they expire after at most an hour.
-- Only the ECR success path has been run end to end (Build #4). Failure paths (a failing test or health check, followed by cleanup) are designed in the `Jenkinsfile` but have not been exercised. Builds #1–#3 failed for other reasons and are described above.
-- Build #4 ran `docker build` for the local health-check image and `docker buildx build --platform linux/amd64` for the published image.
+- Build #5 ran the success path through Deploy to EC2. Failure paths (a failing test or health check, followed by cleanup) are designed in the `Jenkinsfile` but have not been exercised. Builds #1–#3 failed for other reasons and are described above. Live automatic rollback on the instance has not been exercised.
+- Build #4 and Build #5 each ran `docker build` for the local health-check image and `docker buildx build --platform linux/amd64` for the published image.
 - The published image has no provenance or SBOM attestations (`--provenance=false --sbom=false`), so it is a plain single manifest.
 - The dind daemon is privileged (see above). Do not expose it or add published ports to the `docker` service.
 - The initial admin account and job configuration are manual, one-time steps stored in the `jenkins-home` volume.
