@@ -5,15 +5,19 @@ This document records the primary reliability tests performed against the deploy
 Tests 1 and 2 below are historical. They were run when Nginx proxied to systemd unit `sre-service` on
 `127.0.0.1:8000`. The results in those sections are unchanged.
 
-Current production traffic is:
+The path verified by Jenkins Build #5, while the instance was running, is:
 
 ```text
 Internet -> Nginx :80 -> Docker container 127.0.0.1:18001 -> FastAPI /health
 ```
 
-The container serves digest `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
-Stopping `sre-service` does not interrupt that path. Automatic deployment rollback is implemented and
+The container served digest `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
+Stopping `sre-service` does not interrupt that path. A later controlled manual failure injection on that
+path is recorded in `docs/datadog-monitoring.md`: healthy checks were OK, failed HTTP checks followed,
+the Datadog monitor went from OK to ALERT, and after manual application recovery it returned to OK.
+The exact injection command is not recorded here. Automatic deployment rollback is implemented and
 unit-tested. These historical tests restored `sre-service` by hand. They did not exercise that rollback.
+The EC2 instance is now stopped, and the Datadog synthetic test is paused.
 
 ## Test 1 — Automatic Process Recovery
 

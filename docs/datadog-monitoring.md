@@ -3,9 +3,9 @@
 A Datadog Synthetic HTTP test checks the application's `/health` endpoint from outside AWS.
 It adds an external view of availability to the on-host Python monitor and CloudWatch.
 
-**Status in one line:** passing checks are verified, and a controlled demonstration produced failed HTTP
-checks. A Datadog monitor status of ALERT, alert notifications, and a Datadog recovery notification have not
-been recorded.
+**Status in one line:** healthy checks were OK. Controlled manual failure injection produced failed HTTP
+checks, the monitor went from OK to ALERT, and after manual application recovery it returned to OK. The
+synthetic test is paused, and the EC2 instance is stopped. A Datadog notification delivery was not recorded.
 
 ## Where this configuration lives
 
@@ -19,13 +19,15 @@ screenshots are committed.
 
 ## Current public path
 
-Nginx on port 80 proxies to the Docker container at `127.0.0.1:18001`. That container is the digest deployed
-by Jenkins Build #5, `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Datadog's
-public `GET /health` follows that path.
+While the instance was running, Nginx on port 80 proxied to the Docker container at `127.0.0.1:18001`. That
+container is the digest deployed by Jenkins Build #5,
+`sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Datadog's public `GET /health`
+followed that path. The EC2 instance is now stopped, and this synthetic test is paused.
 
-`sre-service` still listens on `127.0.0.1:8000`. Stopping it does not fail the public endpoint, because Nginx
+`sre-service` listened on `127.0.0.1:8000`. Stopping it does not fail the public endpoint, because Nginx
 does not route there. The earlier procedure `sudo systemctl stop sre-service` applied when Nginx proxied to
-that systemd process. It is not the way to interrupt the current public path.
+that systemd process. It is not the failure injection used for the Datadog demonstration. The exact command
+for that demonstration is not recorded. It was controlled manual failure injection on the public path.
 
 ## Verified configuration
 
@@ -54,12 +56,16 @@ Observed across both executions:
 - `Content-Type: application/json` assertion: passed
 - Datadog monitor status during those passing runs: **OK**
 
-A later controlled demonstration produced failed HTTP checks from this same synthetic test against the public
-endpoint. Those failed checks are recorded. This document does not record a Datadog monitor status of ALERT.
+A later controlled manual failure injection produced failed HTTP checks from this same synthetic test.
+After multiple failed checks the Datadog monitor went from **OK** to **ALERT**. The application was then
+recovered by hand. The monitor returned from **ALERT** to **OK**.
 
-Restoring the public endpoint in that demonstration was manual recovery of the running service. It was not
-the deploy script's automatic rollback. That rollback is implemented in `deploy/ec2_deploy.py` and covered by
+That sequence is automated failure detection and manual runtime recovery. It is not the deploy script's
+automatic rollback. That rollback is implemented in `deploy/ec2_deploy.py` and covered by
 `deploy/test_ec2_deploy.py`. It has not been exercised on the instance.
+
+No Datadog notification delivery is recorded. The exact injection command, timings, and failed-check count
+beyond "multiple" are not recorded.
 
 ## How the three monitoring layers differ
 
@@ -70,7 +76,7 @@ the deploy script's automatic rollback. That rollback is implemented in `deploy/
 | What it requests | `http://127.0.0.1/health` through Nginx, which proxies to the container on `127.0.0.1:18001` | Does not probe anything itself; it uses the monitor's metrics | The public endpoint, across the internet, which Nginx serves from that container |
 | Check interval | Every 5 seconds by default, faster retries after a failure | Metrics arrive at the monitor's pace; alarm period is set in CloudWatch | Every 15 minutes |
 | Output | JSON log events, a local alert after 3 consecutive failures | Custom metrics `Availability`, `LatencyMs`, `Failures` in `SREPlatform`, a dashboard, a `Failures` alarm, SNS email | Pass/fail per run, response time, monitor status |
-| Verified | Yes, including a historical systemd outage and the current Nginx check | Yes, alarm and SNS email verified end to end in a controlled outage; the installed unit now publishes from Nginx | Passing checks, and failed HTTP checks during a controlled demonstration. Monitor status ALERT was not recorded |
+| Verified | Yes, including a historical systemd outage and the Nginx check used during the demonstration | Yes, alarm and SNS email verified end to end in a controlled outage; the installed unit published from Nginx | Healthy OK, failed HTTP checks, OK → ALERT, then ALERT → OK after manual recovery. Notification delivery was not recorded |
 
 ### Why more than one layer
 
@@ -88,12 +94,10 @@ appear in Datadog, before any alert settings are considered.
 
 ## Not yet verified
 
-- **Monitor status ALERT.** Failed HTTP checks were observed. A Datadog monitor status of ALERT was not recorded.
-- **Alert notifications.** No Datadog notification (email or other channel) has been configured or tested.
-- **Datadog recovery notification.** A transition of the Datadog monitor from an alerting state back to OK has
-  not been recorded. Manual restoration of the application is a separate action.
-- **Retry and alert-condition settings.** Behavior under failure (retries, how many failures trigger an alert)
-  has not been recorded.
+- **Alert notification delivery.** The monitor status changed OK → ALERT → OK. Delivery of a Datadog
+  notification message was not recorded.
+- **Exact alert settings.** The transition followed multiple failed checks. The configured retry count and
+  alert condition are not recorded in this repository.
 - **Multiple locations.** Only one location is used, so a regional problem at that location could look like an
   application failure.
 
@@ -109,12 +113,9 @@ appear in Datadog, before any alert settings are considered.
 - **No Datadog agent or telemetry.** There are no Datadog infrastructure metrics, logs, or APM data.
 - **No linkage to CloudWatch.** Datadog results do not feed CloudWatch, SNS, or the Python monitor.
 
-## Remaining verification tasks
+## After the demonstration
 
-These are suggestions, not completed work:
-
-1. `sudo systemctl stop sre-service` does not fail the public check. Nginx routes to the container on
-   `127.0.0.1:18001`, not to that systemd process.
-2. Configure a Datadog notification channel and confirm a message is actually delivered.
-3. Record whether the Datadog monitor status becomes ALERT when HTTP checks fail, and whether it returns to OK
-   after the public path is restored by hand. That manual restore is not the deploy script's automatic rollback.
+The EC2 instance is stopped. This Datadog synthetic test is paused. `sudo systemctl stop sre-service` does
+not fail the public check while Nginx routes to the container on `127.0.0.1:18001`. A remaining check, not
+done here, is delivery of a Datadog notification message. That is separate from the verified monitor-status
+transition and from automatic deployment rollback.

@@ -13,8 +13,9 @@ each other.
   was not changed by the Jenkins integration work.
 - **Jenkins publishes images here.** After tests and a local health check, the pipeline
   pushes a `linux/amd64` image tagged with the full commit SHA. Build #5 then deployed
-  `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Nginx serves it
-  on `127.0.0.1:18001`. See `jenkins/README.md`. This directory was not part of that deploy.
+  `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`. Nginx proxied it
+  to `127.0.0.1:18001` while the instance was running. The instance is now stopped. See `jenkins/README.md`.
+  This directory was not part of that deploy.
 - **This directory does not manage EC2.** Nothing here changes the instance, its
   security groups, Nginx, or systemd.
 
