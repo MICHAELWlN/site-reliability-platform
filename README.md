@@ -542,3 +542,61 @@ It does **not** currently:
 The historical failure demonstration stopped and started `sre-service` by hand while Nginx still proxied to it. The on-host monitor detected that outage and the recovery, CloudWatch entered alarm, and SNS delivered email. A later controlled manual failure injection on the Docker path produced Datadog's OK → ALERT → OK transition. Neither demonstration was the deploy script's automatic rollback.
 
 Potential improvements include managing the EC2 deployment with infrastructure as code and configuration management, a live exercise of automatic deploy rollback, tighter least-privilege IAM, TLS, centralized logging, a recorded Datadog notification delivery, and additional failure scenarios.
+
+## Verified CI/CD Deployment & Incident Response
+
+The following screenshots document the successful Jenkins Build #5 deployment and controlled failure-recovery demonstration.
+
+### Automated Deployment
+
+Jenkins successfully completed application testing, Docker image building, health verification, immutable ECR publishing, and EC2 deployment through AWS Systems Manager.
+
+**Jenkins Build #5 — All stages successful**
+
+![Jenkins pipeline success](docs/images/IMG_9384.jpeg)
+
+**Amazon ECR — Verified immutable image**
+
+![ECR published image](docs/images/IMG_9385.jpeg)
+
+**AWS Systems Manager — Successful deployment, exit code 0**
+
+![SSM deployment success](docs/images/IMG_9386.jpeg)
+
+### Failure Detection & Alerting
+
+A controlled application outage triggered CloudWatch and Datadog monitoring alerts. Datadog recorded HTTP 502 responses from the public health endpoint.
+
+**CloudWatch — Failure alarm triggered**
+
+![CloudWatch ALARM](docs/images/IMG_9387.jpeg)
+
+**Datadog — External HTTP 502 failure**
+
+![Datadog failed HTTP check](docs/images/IMG_9388.jpeg)
+
+**Datadog — ALERT state**
+
+![Datadog ALERT](docs/images/IMG_9389.jpeg)
+
+**Datadog — Alert email delivered**
+
+![Datadog triggered notification](docs/images/IMG_9393.jpeg)
+
+### Manual Recovery & Verification
+
+After manually restoring the application, the external synthetic checks recovered and Datadog delivered a recovery notification.
+
+**Datadog — Recovered to OK**
+
+![Datadog recovery status](docs/images/IMG_9390.jpeg)
+
+**Datadog — HTTP 200 verification**
+
+![Datadog passing HTTP check](docs/images/IMG_9391.jpeg)
+
+**Datadog — Recovery email delivered**
+
+![Datadog recovery notification](docs/images/IMG_9392.jpeg)
+
+**Recovery distinction:** Runtime recovery was performed manually. Automated deployment rollback safeguards were implemented and unit-tested but were not live-verified.
