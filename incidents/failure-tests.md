@@ -2,6 +2,19 @@
 
 This document records the primary reliability tests performed against the deployed AWS environment.
 
+Tests 1 and 2 below are historical. They were run when Nginx proxied to systemd unit `sre-service` on
+`127.0.0.1:8000`. The results in those sections are unchanged.
+
+Current production traffic is:
+
+```text
+Internet -> Nginx :80 -> Docker container 127.0.0.1:18001 -> FastAPI /health
+```
+
+The container serves digest `sha256:6951edc16cb827ad3c13814eaa9fb490ffb9f1402453e7ccad31de376ac48e8e`.
+Stopping `sre-service` does not interrupt that path. Automatic deployment rollback is implemented and
+unit-tested. These historical tests restored `sre-service` by hand. They did not exercise that rollback.
+
 ## Test 1 — Automatic Process Recovery
 
 ### Purpose

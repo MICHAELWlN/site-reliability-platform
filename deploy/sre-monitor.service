@@ -1,0 +1,19 @@
+# systemd unit for the on-host health monitor. It checks Nginx and publishes
+# CloudWatch metrics with the EC2 instance role. It does not set access keys.
+
+[Unit]
+Description=SRE Platform health monitor
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/site-reliability-platform
+Environment=AWS_DEFAULT_REGION=us-east-2
+ExecStart=/home/ubuntu/site-reliability-platform/.venv/bin/python monitor/monitor.py --url http://127.0.0.1/health --cloudwatch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (Git-ignored) only if you need to override defaults.
+# Every value below is already the default. No credentials belong in this file.
+aws_region           = "us-east-2"
+aws_profile          = "sre-lab"
+repository_name      = "sre-platform"
+retained_image_count = 10

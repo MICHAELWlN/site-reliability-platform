@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "2.2",
+  "description": "SREPlatformDeploy deploys one immutable sre-platform digest. The only parameter is imageDigest.",
+  "parameters": {
+    "imageDigest": {
+      "type": "String",
+      "description": "ECR image digest to deploy.",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "deploy",
+      "inputs": {
+        "timeoutSeconds": "600",
+        "runCommand": [
+          "/usr/local/sbin/sre-platform-deploy --digest '{{ imageDigest }}'"
+        ]
+      }
+    }
+  ]
+}
