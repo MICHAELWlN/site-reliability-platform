@@ -1,14 +1,18 @@
 # Site Reliability Platform
 
-## Demo
+Demo
 
-A walkthrough of the deployed system covering automatic process recovery, synthetic monitoring, controlled failure injection, CloudWatch/SNS alerting, manual restoration, and recovery detection.
+Watch the Full SRE Platform Demonstration on LinkedIn
 
-**[Watch the project demo on LinkedIn](https://lnkd.in/p/gpG-f3v8)**
+A walkthrough of my AWS Site Reliability Platform demonstrating:
 
-A hands-on site reliability engineering project focused on deploying, monitoring, testing, and recovering a web service on AWS.
+* Automated CI/CD: Jenkins Build #5 successfully tested, built, and deployed a Dockerized FastAPI application through Amazon ECR and AWS Systems Manager to EC2.
+* Deployment Reliability: Immutable image verification, container health checks, restricted IAM permissions, and Nginx cutover.
+* Monitoring & Alerting: Custom CloudWatch metrics, SNS email notifications, and external Datadog Synthetic Monitoring.
+* Failure Injection: Simulated an application outage and verified CloudWatch transitioned to ALARM and Datadog to ALERT.
+* Incident Recovery: Manually restored the application, confirmed HTTP 200 health checks, and verified recovery notifications.
 
-The application itself is intentionally minimal. The focus is the reliability layer around it: Linux service management, reverse proxying, synthetic monitoring, observability, alerting, failure testing, and recovery.
+Outcome: Successfully demonstrated end-to-end automated deployment, failure detection, alert delivery, and manual incident recovery. Automated deployment rollback safeguards were also implemented and unit-tested, but not live-tested.
 
 ## Architecture
 
